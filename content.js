@@ -145,6 +145,7 @@
       selectedCommandId: "summon_item",
       searchQuery: "",
       searchSuggestions: { query: "", commands: [], items: [] },
+      suggestionSelection: [],
       itemActionMenu: { itemId: "", itemName: "" },
       customTemplateDraft: { name: "", content: "", replaceUid: true },
       runtimeInvalidated: false,
@@ -333,6 +334,14 @@
     state.ui.itemActionMenu = { itemId: "", itemName: "" };
   }
 
+  function normalizeSuggestionSelection(list) {
+    return Array.isArray(list) ? uniqStrings(list.map((item) => String(item || "").trim()).filter(Boolean)) : [];
+  }
+
+  function clearSuggestionSelection() {
+    state.ui.suggestionSelection = [];
+  }
+
   function normalizeCustomTemplateDraft(draft) {
     if (!draft || typeof draft !== "object") {
       return { name: "", content: "", replaceUid: true };
@@ -440,6 +449,7 @@
       state.ui.libraryView = "list";
     }
     state.ui.itemActionMenu = normalizeItemActionMenu(state.ui.itemActionMenu);
+    state.ui.suggestionSelection = normalizeSuggestionSelection(state.ui.suggestionSelection);
     state.ui.customTemplateDraft = normalizeCustomTemplateDraft(state.ui.customTemplateDraft);
     state.ui.runtimeInvalidated = Boolean(state.ui.runtimeInvalidated);
     state.ui.runtimeInvalidatedHintShown = Boolean(state.ui.runtimeInvalidatedHintShown);
@@ -1161,6 +1171,7 @@
     if (field === "searchQuery") {
       isSearchComposing = false;
       state.ui.searchQuery = event.target.value;
+      clearSuggestionSelection();
       clearItemActionMenu();
       clearStatus();
       render();
@@ -1297,20 +1308,74 @@
       await persistState();
       return;
     }
+    if (action === "toggle-suggestion-item") {
+      const itemId = String(node.dataset.itemId || "").trim();
+      if (!itemId) {
+        return;
+      }
+      const current = new Set(normalizeSuggestionSelection(state.ui.suggestionSelection));
+      if (current.has(itemId)) {
+        current.delete(itemId);
+      } else {
+        current.add(itemId);
+      }
+      state.ui.suggestionSelection = Array.from(current);
+      clearStatus();
+      render();
+      await persistState();
+      return;
+    }
+    if (action === "suggestion-select-all") {
+      state.ui.suggestionSelection = normalizeSuggestionSelection((state.ui.searchSuggestions?.items || []).map((item) => item.itemId));
+      clearStatus();
+      render();
+      await persistState();
+      return;
+    }
+    if (action === "suggestion-invert") {
+      const availableIds = normalizeSuggestionSelection((state.ui.searchSuggestions?.items || []).map((item) => item.itemId));
+      const selected = new Set(normalizeSuggestionSelection(state.ui.suggestionSelection));
+      state.ui.suggestionSelection = availableIds.filter((itemId) => !selected.has(itemId));
+      clearStatus();
+      render();
+      await persistState();
+      return;
+    }
+    if (action === "suggestion-clear") {
+      clearSuggestionSelection();
+      clearStatus();
+      render();
+      await persistState();
+      return;
+    }
+    if (action === "apply-suggestion-items-action") {
+      const targetCommandId = String(node.dataset.commandId || "").trim();
+      const selectedItemIds = getSelectedSuggestionItemIds(state.ui.searchSuggestions);
+      if (!COMMAND_MAP.has(targetCommandId)) {
+        return;
+      }
+      if (!selectedItemIds.length) {
+        setStatus("请先勾选要处理的道具。", "error");
+        render();
+        await persistState();
+        return;
+      }
+      clearItemActionMenu();
+      openWorkspace(targetCommandId);
+      applyItemSuggestionToCommand(targetCommandId, selectedItemIds);
+      setStatus(`已打开命令并预填 ${selectedItemIds.length} 个道具`, "success");
+      render();
+      await persistState();
+      return;
+    }
     if (action === "open-suggested-command") {
       const targetCommandId = String(node.dataset.commandId || "");
-      const itemId = String(node.dataset.itemId || "").trim();
       if (!COMMAND_MAP.has(targetCommandId)) {
         return;
       }
       clearItemActionMenu();
       openWorkspace(targetCommandId);
-      if (itemId) {
-        applyItemSuggestionToCommand(targetCommandId, itemId);
-        setStatus(`已打开命令并预填道具 ${itemId}`, "success");
-      } else {
-        clearStatus();
-      }
+      clearStatus();
       render();
       await persistState();
       return;
@@ -1545,6 +1610,7 @@
     }
     if (field === "searchQuery") {
       state.ui.searchQuery = target.value;
+      clearSuggestionSelection();
       clearItemActionMenu();
       clearStatus();
       if (isSearchComposing) {
@@ -2393,19 +2459,19 @@
     if (!targetParam) {
       return false;
     }
-    const value = String(itemId || "").trim();
-    if (!value) {
+    const values = uniqStrings((Array.isArray(itemId) ? itemId : [itemId]).map((value) => String(value || "").trim()).filter(Boolean));
+    if (!values.length) {
       return false;
     }
     const mode = targetParam.inputMode || targetParam.type;
     if (mode === "picker_multi" || mode === "enum_multi") {
-      ws.multiValues[targetParam.key] = [value];
-      ws.values[targetParam.key] = value;
+      ws.multiValues[targetParam.key] = values;
+      ws.values[targetParam.key] = values.join(",");
     } else {
-      ws.values[targetParam.key] = value;
+      ws.values[targetParam.key] = values[0];
     }
     if (isItemPickerParam(targetParam)) {
-      const picked = (catalogStore.itemOptions || []).find((item) => item.id === value);
+      const picked = (catalogStore.itemOptions || []).find((item) => item.id === values[0]);
       const filter = getItemPickerFilterState(ws, targetParam);
       if (picked) {
         filter.scope = picked.scope || filter.scope || "";
@@ -2418,10 +2484,20 @@
         }
       }
       filter.crossScope = false;
-      ws.pickerQueries[targetParam.key] = picked?.name || value;
+      ws.pickerQueries[targetParam.key] = values.length > 1 ? "" : (picked?.name || values[0]);
       ws.pickerCursor[targetParam.key] = 0;
     }
     return true;
+  }
+
+  function getSelectedSuggestionItemIds(suggestions) {
+    const availableIds = new Set((Array.isArray(suggestions?.items) ? suggestions.items : []).map((item) => String(item.itemId || "").trim()).filter(Boolean));
+    const selected = normalizeSuggestionSelection(state.ui.suggestionSelection);
+    const filtered = selected.filter((itemId) => availableIds.has(itemId));
+    if (filtered.length !== selected.length) {
+      state.ui.suggestionSelection = filtered;
+    }
+    return filtered;
   }
 
   function renderLibraryTop(command) {
@@ -2493,32 +2569,36 @@
   function renderSearchSuggestionPanel(suggestions) {
     const itemSuggestions = Array.isArray(suggestions?.items) ? suggestions.items : [];
     const commandSuggestions = Array.isArray(suggestions?.commands) ? suggestions.commands : [];
-    const visibleItemSuggestions = itemSuggestions.slice(0, 4);
-    const hasItemHits = visibleItemSuggestions.length > 0;
-    const hiddenCount = Math.max(0, itemSuggestions.length - visibleItemSuggestions.length);
-    const openedItemId = String(state.ui.itemActionMenu?.itemId || "");
+    const hasItemHits = itemSuggestions.length > 0;
+    const selectedItemIds = getSelectedSuggestionItemIds(suggestions);
+    const selectedSet = new Set(selectedItemIds);
     return `
       <section class="gm-helper-panel gm-helper-suggestion-panel">
         <div class="gm-helper-section-head">
           <div>
             <div class="gm-helper-section-title">搜索推荐</div>
-            <div class="gm-helper-section-desc">根据当前关键词推荐可直接执行的命令与道具。</div>
+            <div class="gm-helper-section-desc">先勾选道具，再统一选择操作；不会默认替你预填某一个物品。</div>
           </div>
         </div>
         <div class="gm-helper-suggest-grid">
           <div class="gm-helper-suggest-block">
             <div class="gm-helper-subtitle">推荐操作</div>
             ${commandSuggestions.length
-              ? `<div class="gm-helper-chip-row gm-helper-suggest-op-row">${commandSuggestions.map((row) => `<button type="button" class="gm-helper-chip" data-action="open-suggested-command" data-command-id="${escapeHtml(row.commandId)}" ${row.itemId ? `data-item-id="${escapeHtml(row.itemId)}"` : ""}>${escapeHtml(row.title)}</button>`).join("")}</div>${commandSuggestions[0].reason ? `<div class="gm-helper-inline-tip">${escapeHtml(commandSuggestions[0].reason)}</div>` : ""}`
+              ? `<div class="gm-helper-chip-row gm-helper-suggest-op-row">${commandSuggestions.map((row) => `<button type="button" class="gm-helper-chip" data-action="open-suggested-command" data-command-id="${escapeHtml(row.commandId)}">${escapeHtml(row.title)}</button>`).join("")}</div>${commandSuggestions[0].reason ? `<div class="gm-helper-inline-tip">${escapeHtml(commandSuggestions[0].reason)}</div>` : ""}`
               : '<div class="gm-helper-empty">未命中推荐操作，请继续输入更精确关键词。</div>'}
           </div>
           <div class="gm-helper-suggest-block">
-            <div class="gm-helper-subtitle">推荐道具</div>
-            ${hasItemHits ? `<div class="gm-helper-suggest-item-list">${visibleItemSuggestions.map((item) => {
+            <div class="gm-helper-picker-head">
+              <div class="gm-helper-subtitle">推荐道具</div>
+              ${hasItemHits ? `<div class="gm-helper-picker-head-actions"><button type="button" class="gm-helper-button gm-helper-button-ghost" data-action="suggestion-select-all">全选当前结果</button><button type="button" class="gm-helper-button gm-helper-button-ghost" data-action="suggestion-invert">反选</button><button type="button" class="gm-helper-button gm-helper-button-ghost" data-action="suggestion-clear">清空</button></div>` : ""}
+            </div>
+            ${hasItemHits
+              ? `<div class="gm-helper-inline-tip">当前已选 ${selectedItemIds.length} 项。勾选后可统一带入下方高频物品操作。</div><div class="gm-helper-chip-row gm-helper-suggest-op-row"><button type="button" class="gm-helper-chip" data-action="apply-suggestion-items-action" data-command-id="add_item" ${selectedItemIds.length ? "" : "disabled"}>背包加道具</button><button type="button" class="gm-helper-chip" data-action="apply-suggestion-items-action" data-command-id="summon_item" ${selectedItemIds.length ? "" : "disabled"}>局内刷物品</button></div><div class="gm-helper-suggest-item-list">${itemSuggestions.map((item) => {
               const itemId = String(item.itemId || "");
-              const expanded = openedItemId && openedItemId === itemId;
-              return `<div class="gm-helper-suggest-item ${expanded ? "gm-helper-suggest-item-expanded" : ""}"><button type="button" class="gm-helper-suggest-item-trigger" data-action="open-item-action-menu" data-item-id="${escapeHtml(itemId)}" data-item-name="${escapeHtml(item.name)}"><div class="gm-helper-suggest-item-main"><div class="gm-helper-suggest-item-title">${escapeHtml(itemId)} ${escapeHtml(item.name)}</div><div class="gm-helper-suggest-item-meta">${escapeHtml(item.path)}</div></div><span class="gm-helper-chip gm-helper-chip-ghost">${expanded ? "收起操作" : "选择操作"}</span></button>${expanded ? `<div class="gm-helper-chip-row gm-helper-suggest-item-actions"><button type="button" class="gm-helper-chip gm-helper-chip-ghost" data-action="choose-item-action" data-command-id="add_item" data-item-id="${escapeHtml(itemId)}">背包加道具</button><button type="button" class="gm-helper-chip gm-helper-chip-ghost" data-action="choose-item-action" data-command-id="summon_item" data-item-id="${escapeHtml(itemId)}">局内刷物品</button><button type="button" class="gm-helper-chip gm-helper-chip-ghost" data-action="choose-item-action" data-command-id="send_mail" data-item-id="${escapeHtml(itemId)}">邮件发放</button></div>` : ""}</div>`;
-            }).join("")}</div>${hiddenCount ? `<div class="gm-helper-inline-tip">还有 ${hiddenCount} 条结果，继续输入更精确关键词可快速定位。</div>` : ""}` : `<div class="gm-helper-empty">当前词典未命中该道具。</div><div class="gm-helper-button-row"><button type="button" id="gm-helper-import-guide-btn" class="gm-helper-button gm-helper-button-secondary" data-action="goto-settings-import">前往设置页导入 Item.xlsx</button></div>`}
+              const checked = selectedSet.has(itemId);
+              return `<button type="button" class="gm-helper-suggest-item gm-helper-suggest-item-select ${checked ? "gm-helper-suggest-item-expanded" : ""}" data-action="toggle-suggestion-item" data-item-id="${escapeHtml(itemId)}"><div class="gm-helper-suggest-item-main"><div class="gm-helper-suggest-item-title">${escapeHtml(itemId)} ${escapeHtml(item.name)}</div><div class="gm-helper-suggest-item-meta">${escapeHtml(item.path)}</div></div><span class="gm-helper-picker-check ${checked ? "gm-helper-picker-check-on" : ""}">${checked ? "✓" : ""}</span></button>`;
+            }).join("")}</div>`
+              : `<div class="gm-helper-empty">当前词典未命中该道具。</div><div class="gm-helper-button-row"><button type="button" id="gm-helper-import-guide-btn" class="gm-helper-button gm-helper-button-secondary" data-action="goto-settings-import">前往设置页导入 Item.xlsx</button></div>`}
           </div>
         </div>
       </section>
@@ -3279,7 +3359,7 @@
     if (!text) {
       return { query: "", commands: [], items: [] };
     }
-    const itemSuggestions = searchItemSuggestions(text).slice(0, 6);
+    const itemSuggestions = searchItemSuggestions(text);
     const commandSuggestions = searchCommandSuggestions(text, itemSuggestions).slice(0, 6);
     return { query: text, commands: commandSuggestions, items: itemSuggestions };
   }
@@ -3424,9 +3504,9 @@
   function searchCommandSuggestions(query, itemSuggestions) {
     const rows = [];
     const dedup = new Set();
-    const topItem = itemSuggestions[0] || null;
+    const itemHitCount = Array.isArray(itemSuggestions) ? itemSuggestions.length : 0;
 
-    if (topItem) {
+    if (itemHitCount) {
       ["add_item", "summon_item", "send_mail"].forEach((commandId, index) => {
         const command = COMMAND_MAP.get(commandId);
         if (!command || dedup.has(commandId)) {
@@ -3436,9 +3516,9 @@
         rows.push({
           commandId,
           title: command.title,
-          reason: `匹配道具“${topItem.name}”后推荐`,
+          reason: itemHitCount === 1 ? "已匹配 1 个道具，可直接进入操作。" : `已匹配 ${itemHitCount} 个道具，可先勾选后批量处理。`,
           score: 1400 - index * 20,
-          itemId: topItem.itemId
+          itemId: ""
         });
       });
     }
@@ -3448,13 +3528,12 @@
         return;
       }
       dedup.add(row.command.id);
-      const supportItemParam = row.command.params.some((param) => String(param.optionSource || "") === "items");
       rows.push({
         commandId: row.command.id,
         title: row.command.title,
         reason: row.meta || "关键词命中",
         score: 900 + Number(row.score || 0),
-        itemId: topItem && supportItemParam ? topItem.itemId : ""
+        itemId: ""
       });
     });
 
