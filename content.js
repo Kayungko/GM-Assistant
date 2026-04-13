@@ -14,6 +14,9 @@
   const REPO_RELEASE_LATEST_PAGE_URL = "https://github.com/Kayungko/GM-Assistant/releases/latest";
   const UPDATE_CHECK_INTERVAL_MS = 24 * 60 * 60 * 1000;
   const FAB_ICON_PATH = "floatingBall.png";
+  const SIDEBAR_DEFAULT_WIDTH = 420;
+  const SIDEBAR_MIN_WIDTH = 420;
+  const SIDEBAR_MAX_WIDTH = 960;
   const CATALOG_REGISTRY_PATH = "data/catalogs/registry.json";
   const CATALOG_REGISTRY_SCHEMA = "gm-helper-registry-v1";
   const FALLBACK_CATALOG_REGISTRY = {
@@ -113,6 +116,7 @@
       buildSummonItem,
       buildAddItem,
       buildSendMail,
+      buildSendTemplateMail,
       buildSendCustomMail,
       buildRevokeMail
     };
@@ -176,7 +180,8 @@
       runtimeInvalidatedHintShown: false,
       status: null,
       collapsedSections: {},
-      fabPosition: null
+      fabPosition: null,
+      sidebarWidth: SIDEBAR_DEFAULT_WIDTH
     },
     workspaces: {}
   };
@@ -187,6 +192,7 @@
   let isSearchComposing = false;
   let pickerComposingKey = "";
   let fabDragState = null;
+  let sidebarResizeState = null;
   let updateCheckPromise = null;
   const dismissedUpdateVersionsInSession = new Set();
   let catalogStore = createEmptyCatalogStore();
@@ -307,7 +313,8 @@
             searchQuery: state.ui.searchQuery,
             customTemplateDraft: state.ui.customTemplateDraft,
             collapsedSections: state.ui.collapsedSections,
-            fabPosition: state.ui.fabPosition
+            fabPosition: state.ui.fabPosition,
+            sidebarWidth: state.ui.sidebarWidth
           },
           workspaces: state.workspaces
         }
@@ -528,6 +535,7 @@
     state.ui.runtimeInvalidated = Boolean(state.ui.runtimeInvalidated);
     state.ui.runtimeInvalidatedHintShown = Boolean(state.ui.runtimeInvalidatedHintShown);
     state.ui.searchSuggestions = { query: "", commands: [], items: [] };
+    state.ui.sidebarWidth = normalizeSidebarWidth(state.ui.sidebarWidth);
   }
 
   function merge(base, incoming) {
@@ -1527,7 +1535,9 @@
     document.documentElement.appendChild(sidebar);
 
     applyFabPosition(fab);
+    applySidebarWidth(sidebar);
     bindFabDragging(fab);
+    bindSidebarResizing(sidebar);
 
     fab.addEventListener("click", () => {
       if (fabDragState?.didDrag) {
@@ -1633,6 +1643,93 @@
     fab.style.right = "auto";
   }
 
+  function normalizeSidebarWidth(rawWidth) {
+    return clampSidebarWidth(Number(rawWidth) || SIDEBAR_DEFAULT_WIDTH);
+  }
+
+  function clampSidebarWidth(rawWidth) {
+    const maxByViewport = Math.max(280, window.innerWidth - 16);
+    const maxWidth = Math.min(SIDEBAR_MAX_WIDTH, maxByViewport);
+    const minWidth = Math.min(SIDEBAR_MIN_WIDTH, maxWidth);
+    const width = Number(rawWidth);
+    if (!Number.isFinite(width) || width <= 0) {
+      return minWidth;
+    }
+    return Math.min(Math.max(Math.round(width), minWidth), maxWidth);
+  }
+
+  function applySidebarWidth(sidebar) {
+    if (!sidebar) {
+      return;
+    }
+    if (window.matchMedia("(max-width: 720px)").matches) {
+      sidebar.style.width = "";
+      return;
+    }
+    const width = normalizeSidebarWidth(state.ui.sidebarWidth);
+    state.ui.sidebarWidth = width;
+    sidebar.style.width = `${width}px`;
+  }
+
+  function bindSidebarResizing(sidebar) {
+    sidebar.addEventListener("pointerdown", (event) => {
+      const handle = event.target.closest("[data-role='sidebar-resize-handle']");
+      if (!handle || event.button !== 0) {
+        return;
+      }
+      if (window.matchMedia("(max-width: 720px)").matches) {
+        return;
+      }
+      const rectWidth = sidebar.getBoundingClientRect().width;
+      sidebarResizeState = {
+        pointerId: event.pointerId,
+        handle,
+        startX: event.clientX,
+        startWidth: Number.isFinite(rectWidth) && rectWidth > 0 ? rectWidth : normalizeSidebarWidth(state.ui.sidebarWidth),
+        didResize: false
+      };
+      handle.setPointerCapture(event.pointerId);
+      document.documentElement.classList.add("gm-helper-sidebar-resizing");
+      event.preventDefault();
+    });
+
+    sidebar.addEventListener("pointermove", (event) => {
+      if (!sidebarResizeState || sidebarResizeState.pointerId !== event.pointerId) {
+        return;
+      }
+      const deltaX = sidebarResizeState.startX - event.clientX;
+      if (!sidebarResizeState.didResize && Math.abs(deltaX) < 2) {
+        return;
+      }
+      sidebarResizeState.didResize = true;
+      const width = clampSidebarWidth(sidebarResizeState.startWidth + deltaX);
+      state.ui.sidebarWidth = width;
+      sidebar.style.width = `${width}px`;
+    });
+
+    sidebar.addEventListener("pointerup", async (event) => {
+      await finishSidebarResize(event.pointerId);
+    });
+    sidebar.addEventListener("pointercancel", async (event) => {
+      await finishSidebarResize(event.pointerId);
+    });
+  }
+
+  async function finishSidebarResize(pointerId) {
+    if (!sidebarResizeState || sidebarResizeState.pointerId !== pointerId) {
+      return;
+    }
+    if (sidebarResizeState.handle?.hasPointerCapture(pointerId)) {
+      sidebarResizeState.handle.releasePointerCapture(pointerId);
+    }
+    document.documentElement.classList.remove("gm-helper-sidebar-resizing");
+    const didResize = sidebarResizeState.didResize;
+    sidebarResizeState = null;
+    if (didResize) {
+      await persistState();
+    }
+  }
+
   function normalizedFabPosition() {
     const position = state.ui.fabPosition || {
       left: Math.max(window.innerWidth - 72, 12),
@@ -1705,12 +1802,15 @@
   function bindWindowResize() {
     window.addEventListener("resize", () => {
       const fab = document.getElementById("gm-helper-fab");
-      if (!fab) {
-        return;
+      if (fab) {
+        state.ui.fabPosition = normalizedFabPosition();
+        applyFabPosition(fab);
       }
 
-      state.ui.fabPosition = normalizedFabPosition();
-      applyFabPosition(fab);
+      const sidebar = document.getElementById("gm-helper-sidebar");
+      if (sidebar) {
+        applySidebarWidth(sidebar);
+      }
     });
   }
 
@@ -2099,6 +2199,69 @@
       await persistState();
       return;
     }
+    if (action === "mail-template-add-selected" && command) {
+      const key = String(node.dataset.key || "").trim();
+      if (!key) {
+        return;
+      }
+      const ws = ensureWorkspace(command.id);
+      const selectedIds = getMultiValues(ws, key);
+      if (!selectedIds.length) {
+        setStatus("请先勾选要加入的道具", "error");
+        render();
+        await persistState();
+        return;
+      }
+      const rows = getMailTemplateRows(ws, key);
+      const existing = new Set(rows.map((row) => `${row.itemId}:${row.bind}`));
+      let addedCount = 0;
+      selectedIds.forEach((itemId) => {
+        const keyId = `${itemId}:0`;
+        if (existing.has(keyId)) {
+          return;
+        }
+        rows.push({ itemId, count: "1", bind: "0", name: resolveMailItemName(itemId) });
+        existing.add(keyId);
+        addedCount += 1;
+      });
+      setMailTemplateRows(ws, key, rows);
+      ws.multiValues[key] = [];
+      ws.output = "";
+      setStatus(addedCount ? `已加入 ${addedCount} 个道具到附件列表` : "所选道具已在附件列表中", "success");
+      render();
+      await persistState();
+      return;
+    }
+    if (action === "mail-template-remove-item" && command) {
+      const key = String(node.dataset.key || "").trim();
+      const itemId = String(node.dataset.itemId || "").trim();
+      const bind = String(node.dataset.bind || "0").trim() === "1" ? "1" : "0";
+      if (!key || !itemId) {
+        return;
+      }
+      const ws = ensureWorkspace(command.id);
+      const rows = getMailTemplateRows(ws, key).filter((row) => !(row.itemId === itemId && row.bind === bind));
+      setMailTemplateRows(ws, key, rows);
+      ws.output = "";
+      clearStatus();
+      render();
+      await persistState();
+      return;
+    }
+    if (action === "mail-template-clear-items" && command) {
+      const key = String(node.dataset.key || "").trim();
+      if (!key) {
+        return;
+      }
+      const ws = ensureWorkspace(command.id);
+      setMailTemplateRows(ws, key, []);
+      ws.multiValues[key] = [];
+      ws.output = "";
+      clearStatus();
+      render();
+      await persistState();
+      return;
+    }
     if (action === "item-picker-set-scope" && command) {
       const ws = ensureWorkspace(command.id);
       const param = getParam(command, node.dataset.key);
@@ -2286,6 +2449,46 @@
       await persistState();
       return;
     }
+    if (field === "mailTemplateItemCount") {
+      const ws = ensureWorkspace(target.dataset.commandId);
+      const key = String(target.dataset.key || "").trim();
+      const itemId = String(target.dataset.itemId || "").trim();
+      const bind = String(target.dataset.bind || "0").trim() === "1" ? "1" : "0";
+      if (key && itemId) {
+        const rows = getMailTemplateRows(ws, key).map((row) => {
+          if (row.itemId !== itemId || row.bind !== bind) {
+            return row;
+          }
+          const nextCount = Number(target.value);
+          return { ...row, count: String(Number.isFinite(nextCount) && nextCount > 0 ? Math.floor(nextCount) : 1) };
+        });
+        setMailTemplateRows(ws, key, rows);
+        ws.output = "";
+      }
+      clearStatus();
+      await persistState();
+      return;
+    }
+    if (field === "mailTemplateItemBind") {
+      const ws = ensureWorkspace(target.dataset.commandId);
+      const key = String(target.dataset.key || "").trim();
+      const itemId = String(target.dataset.itemId || "").trim();
+      const oldBind = String(target.dataset.bind || "0").trim() === "1" ? "1" : "0";
+      if (key && itemId) {
+        const rows = getMailTemplateRows(ws, key).map((row) => {
+          if (row.itemId !== itemId || row.bind !== oldBind) {
+            return row;
+          }
+          return { ...row, bind: String(target.value || "0") === "1" ? "1" : "0" };
+        });
+        setMailTemplateRows(ws, key, rows);
+        ws.output = "";
+      }
+      clearStatus();
+      render();
+      await persistState();
+      return;
+    }
     if (field === "importFile") {
       await importCatalogData(target.files?.[0]);
       target.value = "";
@@ -2319,7 +2522,7 @@
     }
 
     const mode = param.inputMode || param.type;
-    const selected = mode === "picker_multi" || mode === "enum_multi"
+    const selected = mode === "picker_multi" || mode === "enum_multi" || mode === "picker_mail_item_list"
       ? getMultiValues(ws, key)
       : (ws.values[key] ? [ws.values[key]] : []);
     const options = getPickerOptions(param, ws.pickerQueries[key] || "", selected, ws);
@@ -2807,12 +3010,14 @@
     ws.pickerQueries = ws.pickerQueries && typeof ws.pickerQueries === "object" ? ws.pickerQueries : {};
     ws.pickerCursor = ws.pickerCursor && typeof ws.pickerCursor === "object" ? ws.pickerCursor : {};
     ws.pickerFilters = ws.pickerFilters && typeof ws.pickerFilters === "object" ? ws.pickerFilters : {};
+    ws.mailTemplateItems = ws.mailTemplateItems && typeof ws.mailTemplateItems === "object" ? ws.mailTemplateItems : {};
     ws.batchMode = ws.batchMode || fresh.batchMode;
     if (command.batchModes && !command.batchModes.some((mode) => mode.id === ws.batchMode)) {
       ws.batchMode = command.batchModes[0].id;
     }
     syncWorkspacePickerFilters(command, ws);
     syncWorkspaceMultiValues(command, ws);
+    syncMailTemplateBuilderValues(command, ws);
     return ws;
   }
 
@@ -2822,7 +3027,7 @@
     command.params.forEach((p) => {
       values[p.key] = String(p.defaultValue ?? "");
     });
-    return { values, output: "", presetDraftName: "", selectedPresetId: "", multiValues: {}, pickerQueries: {}, pickerCursor: {}, pickerFilters: {}, batchMode: command.batchModes?.[0]?.id || "" };
+    return { values, output: "", presetDraftName: "", selectedPresetId: "", multiValues: {}, pickerQueries: {}, pickerCursor: {}, pickerFilters: {}, mailTemplateItems: {}, batchMode: command.batchModes?.[0]?.id || "" };
   }
 
   function syncWorkspacePickerFilters(command, ws) {
@@ -2854,6 +3059,26 @@
     });
   }
 
+  function syncMailTemplateBuilderValues(command, ws) {
+    if (!command?.params?.length) {
+      return;
+    }
+    ws.mailTemplateItems = ws.mailTemplateItems && typeof ws.mailTemplateItems === "object" ? ws.mailTemplateItems : {};
+    command.params.forEach((param) => {
+      const mode = String(param.inputMode || param.type || "");
+      if (mode !== "picker_mail_item_list") {
+        return;
+      }
+      const key = String(param.key || "");
+      const byStore = Array.isArray(ws.mailTemplateItems[key]) ? ws.mailTemplateItems[key] : [];
+      const rows = byStore.length ? byStore : parseMailTemplateItemList(ws.values[key]);
+      const normalized = normalizeMailTemplateItemRows(rows);
+      ws.mailTemplateItems[key] = normalized;
+      ws.values[key] = serializeMailTemplateItemRows(normalized);
+      ws.multiValues[key] = uniqStrings((Array.isArray(ws.multiValues[key]) ? ws.multiValues[key] : []).map((x) => String(x || "").trim()).filter(Boolean));
+    });
+  }
+
   function render() {
     const sidebar = document.getElementById("gm-helper-sidebar");
     if (!sidebar) {
@@ -2873,6 +3098,7 @@
     const libraryHtml = `${renderLibraryTop(command)}${shouldShowSuggestionPanel ? renderSearchSuggestionPanel(suggestions) : ""}${isWorkspaceView ? renderWorkspace(command, ws) : renderLibraryList(results, suggestions)}`;
     const updateModalHtml = renderUpdateModal();
     sidebar.innerHTML = `
+      <div class="gm-helper-resize-handle" data-role="sidebar-resize-handle" title="拖拽调整宽度"></div>
       <div class="gm-helper-wrap">
         ${renderRail()}
         <div class="gm-helper-main">
@@ -3557,6 +3783,10 @@
     const value = ws.values[p.key] ?? "";
     const mode = p.inputMode || (p.type === "select" ? "enum_single" : p.type);
 
+    if (mode === "picker_mail_item_list") {
+      return renderMailTemplateItemBuilderField(command, ws, p, label, helper);
+    }
+
     if (mode === "picker_multi" || mode === "picker_single" || mode === "enum_multi" || mode === "enum_single") {
       const query = ws.pickerQueries[p.key] || "";
       const selected = mode === "picker_multi" || mode === "enum_multi"
@@ -3624,6 +3854,49 @@
       return `<div class="gm-helper-field${span}"><label class="gm-helper-label">${label}</label><textarea class="gm-helper-textarea" ${attrs} placeholder="${escapeHtml(p.placeholder)}">${escapeHtml(value)}</textarea>${helper ? `<div class="gm-helper-inline-tip">${escapeHtml(helper)}</div>` : ""}</div>`;
     }
     return `<div class="gm-helper-field${span}"><label class="gm-helper-label">${label}</label><input class="gm-helper-input" type="${p.type === "number" ? "number" : "text"}" ${attrs} placeholder="${escapeHtml(p.placeholder)}" value="${escapeHtml(value)}" />${helper ? `<div class="gm-helper-inline-tip">${escapeHtml(helper)}</div>` : ""}</div>`;
+  }
+
+  function renderMailTemplateItemBuilderField(command, ws, p, label, helper) {
+    const query = ws.pickerQueries[p.key] || "";
+    const selected = getMultiValues(ws, p.key);
+    const options = getPickerOptions(p, query, selected, ws);
+    const cursor = Math.max(0, Math.min(Number(ws.pickerCursor[p.key] || 0), Math.max(options.length - 1, 0)));
+    const emptyHint = getPickerEmptyHint(p, ws, query, options);
+    const itemFilterPanel = renderItemPickerFilters(command, ws, p);
+    const rows = getMailTemplateRows(ws, p.key);
+    return `
+      <div class="gm-helper-field gm-helper-field-grow">
+        <div class="gm-helper-picker-head">
+          <label class="gm-helper-label">${label}</label>
+          <div class="gm-helper-picker-head-actions">
+            <button type="button" class="gm-helper-button gm-helper-button-ghost" data-action="picker-select-all" data-command-id="${command.id}" data-key="${p.key}">全选当前筛选</button>
+            <button type="button" class="gm-helper-button gm-helper-button-ghost" data-action="picker-invert" data-command-id="${command.id}" data-key="${p.key}">反选</button>
+            <button type="button" class="gm-helper-button gm-helper-button-ghost" data-action="picker-clear" data-command-id="${command.id}" data-key="${p.key}">清空勾选</button>
+          </div>
+        </div>
+        <div class="gm-helper-picker">
+          ${itemFilterPanel}
+          <input class="gm-helper-input" data-field="pickerQuery" data-command-id="${command.id}" data-key="${p.key}" placeholder="输入名称/ID开始搜索，可多选" value="${escapeHtml(query)}" />
+          <div class="gm-helper-button-row">
+            <button type="button" class="gm-helper-button gm-helper-button-accent" data-action="mail-template-add-selected" data-command-id="${command.id}" data-key="${p.key}">加入附件列表</button>
+            <button type="button" class="gm-helper-button gm-helper-button-secondary" data-action="mail-template-clear-items" data-command-id="${command.id}" data-key="${p.key}" ${rows.length ? "" : "disabled"}>清空附件列表</button>
+          </div>
+          <div class="gm-helper-picker-menu">
+            ${options.length ? options.map((opt, index) => {
+              const checked = selected.includes(opt.value);
+              return `<button type="button" class="gm-helper-picker-option ${checked ? "gm-helper-picker-option-active" : ""} ${index === cursor ? "gm-helper-picker-option-focused" : ""}" data-action="picker-toggle-option" data-command-id="${command.id}" data-key="${p.key}" data-option-index="${index}" data-value="${escapeHtml(opt.value)}"><span class="gm-helper-picker-option-text">${escapeHtml(opt.label)}</span><span class="gm-helper-picker-check ${checked ? "gm-helper-picker-check-on" : ""}">${checked ? "✓" : ""}</span></button>`;
+            }).join("") : `<div class="gm-helper-empty">${escapeHtml(emptyHint)}</div>`}
+          </div>
+          <div class="gm-helper-mail-item-list">
+            <div class="gm-helper-subtitle">已加入附件（${rows.length}）</div>
+            ${rows.length
+              ? `<div class="gm-helper-mail-item-scroll">${rows.map((row) => `<div class="gm-helper-mail-item-row"><div class="gm-helper-mail-item-main"><div class="gm-helper-mail-item-title"><span class="gm-helper-mail-item-id">${escapeHtml(row.itemId)}</span><span class="gm-helper-mail-item-name">${escapeHtml(row.name || "")}</span></div><div class="gm-helper-mail-item-meta">${escapeHtml(`${row.itemId}/${row.count}/${row.bind}`)}</div></div><div class="gm-helper-mail-item-edit"><input class="gm-helper-input gm-helper-mail-item-count" type="number" min="1" data-field="mailTemplateItemCount" data-command-id="${command.id}" data-key="${p.key}" data-item-id="${escapeHtml(row.itemId)}" data-bind="${escapeHtml(row.bind)}" value="${escapeHtml(row.count)}" /><select class="gm-helper-select gm-helper-mail-item-bind" data-field="mailTemplateItemBind" data-command-id="${command.id}" data-key="${p.key}" data-item-id="${escapeHtml(row.itemId)}" data-bind="${escapeHtml(row.bind)}"><option value="0" ${row.bind === "0" ? "selected" : ""}>不绑(0)</option><option value="1" ${row.bind === "1" ? "selected" : ""}>绑定(1)</option></select><button type="button" class="gm-helper-button gm-helper-button-danger" data-action="mail-template-remove-item" data-command-id="${command.id}" data-key="${p.key}" data-item-id="${escapeHtml(row.itemId)}" data-bind="${escapeHtml(row.bind)}">删</button></div></div>`).join("")}</div>`
+              : `<div class="gm-helper-empty">请先从上方搜索并加入道具，生成时会自动拼成 itemid/num/bind 列表。</div>`}
+          </div>
+        </div>
+        ${helper ? `<div class="gm-helper-inline-tip">${escapeHtml(helper)}</div>` : ""}
+      </div>
+    `;
   }
 
   function shouldShowParam(param, batchMode) {
@@ -3800,6 +4073,71 @@
     return Array.isArray(ws.multiValues?.[key]) ? ws.multiValues[key] : [];
   }
 
+  function parseMailTemplateItemList(raw) {
+    return String(raw || "")
+      .split(/[\r\n;；]+/)
+      .map((entry) => String(entry || "").trim())
+      .filter(Boolean)
+      .map((entry) => {
+        const parts = entry.split(/[\/,，]+/).map((x) => String(x || "").trim()).filter(Boolean);
+        return {
+          itemId: String(parts[0] || "").trim(),
+          count: String(parts[1] || "1").trim(),
+          bind: String(parts[2] || "0").trim()
+        };
+      });
+  }
+
+  function normalizeMailTemplateItemRows(rows) {
+    const dedup = new Map();
+    (Array.isArray(rows) ? rows : []).forEach((row) => {
+      const itemId = String(row?.itemId || "").trim();
+      if (!/^\d+$/.test(itemId)) {
+        return;
+      }
+      const countRaw = Number(row?.count);
+      const count = Number.isFinite(countRaw) && countRaw > 0 ? Math.floor(countRaw) : 1;
+      const bind = String(row?.bind || "0") === "1" ? "1" : "0";
+      const name = resolveMailItemName(itemId);
+      dedup.set(`${itemId}:${bind}`, {
+        itemId,
+        count: String(count),
+        bind,
+        name
+      });
+    });
+    return Array.from(dedup.values()).sort((left, right) => String(left.itemId).localeCompare(String(right.itemId), "en"));
+  }
+
+  function serializeMailTemplateItemRows(rows) {
+    return (Array.isArray(rows) ? rows : [])
+      .map((row) => `${row.itemId}/${row.count}/${row.bind}`)
+      .join(";");
+  }
+
+  function resolveMailItemName(itemId) {
+    const id = String(itemId || "").trim();
+    if (!id) {
+      return "";
+    }
+    const found = (catalogStore.itemOptions || []).find((item) => String(item.id) === id);
+    return String(found?.name || "").trim();
+  }
+
+  function getMailTemplateRows(ws, key) {
+    ws.mailTemplateItems = ws.mailTemplateItems && typeof ws.mailTemplateItems === "object" ? ws.mailTemplateItems : {};
+    const rows = normalizeMailTemplateItemRows(ws.mailTemplateItems[key]);
+    ws.mailTemplateItems[key] = rows;
+    return rows;
+  }
+
+  function setMailTemplateRows(ws, key, rows) {
+    const normalized = normalizeMailTemplateItemRows(rows);
+    ws.mailTemplateItems = ws.mailTemplateItems && typeof ws.mailTemplateItems === "object" ? ws.mailTemplateItems : {};
+    ws.mailTemplateItems[key] = normalized;
+    ws.values[key] = serializeMailTemplateItemRows(normalized);
+  }
+
   function togglePickerOption(command, key, rawValue) {
     const value = String(rawValue || "").trim();
     if (!value) {
@@ -3811,6 +4149,17 @@
       return;
     }
     const mode = param.inputMode || param.type;
+
+    if (mode === "picker_mail_item_list") {
+      const current = new Set(getMultiValues(ws, key));
+      if (current.has(value)) {
+        current.delete(value);
+      } else {
+        current.add(value);
+      }
+      ws.multiValues[key] = sortValuesByOptionOrder(Array.from(current), param, ws);
+      return;
+    }
 
     if (mode === "picker_multi" || mode === "enum_multi") {
       const current = new Set(getMultiValues(ws, key));
@@ -3828,6 +4177,14 @@
 
   function clearPickerSelections(command, key) {
     const ws = ensureWorkspace(command.id);
+    const param = getParam(command, key);
+    const mode = String(param?.inputMode || param?.type || "");
+    if (mode === "picker_mail_item_list") {
+      ws.multiValues[key] = [];
+      ws.pickerQueries[key] = "";
+      ws.pickerCursor[key] = 0;
+      return;
+    }
     ws.multiValues[key] = [];
     ws.values[key] = "";
     ws.pickerQueries[key] = "";
@@ -3838,6 +4195,12 @@
     const ws = ensureWorkspace(command.id);
     const param = getParam(command, key);
     const options = getPickerOptions(param, ws.pickerQueries[key] || "", [], ws);
+    const mode = String(param?.inputMode || param?.type || "");
+    if (mode === "picker_mail_item_list") {
+      ws.multiValues[key] = options.map((x) => x.value);
+      ws.pickerCursor[key] = 0;
+      return;
+    }
     ws.multiValues[key] = options.map((x) => x.value);
     ws.values[key] = ws.multiValues[key].join(",");
     ws.pickerCursor[key] = 0;
@@ -3849,6 +4212,12 @@
     const options = getPickerOptions(param, ws.pickerQueries[key] || "", [], ws);
     const current = new Set(getMultiValues(ws, key));
     const next = options.map((x) => x.value).filter((id) => !current.has(id));
+    const mode = String(param?.inputMode || param?.type || "");
+    if (mode === "picker_mail_item_list") {
+      ws.multiValues[key] = next;
+      ws.pickerCursor[key] = 0;
+      return;
+    }
     ws.multiValues[key] = next;
     ws.values[key] = next.join(",");
     ws.pickerCursor[key] = 0;
@@ -4374,6 +4743,43 @@
       }
     }
     return ok(lines.join("\n"), lines.length);
+  }
+
+  function buildSendTemplateMail(command, ws) {
+    const uid = required(command, ws, "uid");
+    const templateId = required(command, ws, "mailTemplateId");
+    if (!uid.ok || !templateId.ok) {
+      return uid.ok ? templateId : uid;
+    }
+
+    const rawList = resolveParamValue(getParam(command, "itemList"), ws);
+    const segments = String(rawList || "")
+      .split(/[\r\n;；]+/)
+      .map((entry) => String(entry || "").trim())
+      .filter(Boolean);
+
+    if (!segments.length) {
+      return fail("请填写“道具列表”");
+    }
+
+    const normalized = [];
+    for (let index = 0; index < segments.length; index += 1) {
+      const source = segments[index];
+      const parts = source
+        .split(/[\/,，]+/)
+        .map((x) => String(x || "").trim())
+        .filter(Boolean);
+      if (parts.length !== 3) {
+        return fail(`道具列表第 ${index + 1} 项格式错误，请使用 itemid/num/bind`);
+      }
+      const [itemId, count, bind] = parts;
+      if (!/^\d+$/.test(itemId) || !/^\d+$/.test(count) || !/^\d+$/.test(bind)) {
+        return fail(`道具列表第 ${index + 1} 项包含非法数字，请使用 itemid/num/bind`);
+      }
+      normalized.push(`${itemId}/${count}/${bind}`);
+    }
+
+    return ok(`${command.command} ${uid.value} ${templateId.value} ${normalized.join(";")}`, 1);
   }
 
   function buildSendCustomMail(command, ws) {
