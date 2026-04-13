@@ -403,18 +403,24 @@
     if (!payload || typeof payload !== "object") {
       return null;
     }
+    const mode = String(payload.mode || "updateAvailable").trim();
+    const normalizedMode = mode === "upToDate" ? "upToDate" : "updateAvailable";
     const latestVersion = normalizeVersion(payload.latestVersion || "");
     const latestTag = String(payload.latestTag || "").trim();
     const latestUrl = String(payload.latestUrl || "").trim();
-    if (!latestVersion && !latestTag) {
+    const localVersion = normalizeVersion(payload.localVersion || "");
+    if (!latestVersion && !latestTag && !localVersion) {
       return null;
     }
     return {
+      mode: normalizedMode,
       latestVersion,
       latestTag,
+      localVersion,
       latestUrl: latestUrl || (latestTag ? `${REPO_RELEASE_PAGE_URL}/tag/${encodeURIComponent(latestTag)}` : REPO_RELEASE_PAGE_URL),
       latestPublishedAt: String(payload.latestPublishedAt || "").trim(),
-      latestName: String(payload.latestName || "").trim()
+      latestName: String(payload.latestName || "").trim(),
+      checkedAt: String(payload.checkedAt || "").trim()
     };
   }
 
@@ -1349,19 +1355,37 @@
     }
     state.ui.updateModalOpen = true;
     state.ui.updateModalPayload = normalizeUpdateModalPayload({
+      mode: "updateAvailable",
       latestVersion,
       latestTag: result.latestTag || latestVersion,
       latestUrl: result.latestUrl || REPO_RELEASE_PAGE_URL,
       latestPublishedAt: result.latestPublishedAt || "",
-      latestName: result.latestName || ""
+      latestName: result.latestName || "",
+      checkedAt: new Date().toISOString()
     });
     state.personalData.updateCheck.lastShownVersion = latestVersion;
     return true;
   }
 
+  function openUpToDateModal(result) {
+    const localVersion = normalizeVersion(result?.localVersion || getExtensionVersionSafe());
+    state.ui.updateModalOpen = true;
+    state.ui.updateModalPayload = normalizeUpdateModalPayload({
+      mode: "upToDate",
+      localVersion,
+      latestVersion: normalizeVersion(result?.latestVersion || "") || localVersion,
+      latestTag: String(result?.latestTag || "").trim(),
+      latestUrl: result?.latestUrl || REPO_RELEASE_PAGE_URL,
+      latestPublishedAt: String(result?.latestPublishedAt || "").trim(),
+      latestName: String(result?.latestName || "").trim(),
+      checkedAt: new Date().toISOString()
+    });
+  }
+
   function dismissUpdateModal() {
-    const version = normalizeVersion(state.ui.updateModalPayload?.latestVersion || state.ui.updateModalPayload?.latestTag);
-    if (version) {
+    const payload = normalizeUpdateModalPayload(state.ui.updateModalPayload);
+    const version = normalizeVersion(payload?.latestVersion || payload?.latestTag);
+    if (payload?.mode === "updateAvailable" && version) {
       dismissedUpdateVersionsInSession.add(version);
     }
     state.ui.updateModalOpen = false;
@@ -1932,6 +1956,7 @@
       if (result.status === "updateAvailable") {
         setStatus(`发现新版本 ${result.latestVersion || result.latestTag}，可前往 Release 页面更新`, "success");
       } else if (result.status === "upToDate") {
+        openUpToDateModal(result);
         setStatus("已是最新版本", "success");
       } else if (result.status === "incomparable") {
         setStatus("版本格式无法比较，请确认 manifest.version 与 tag 格式", "error");
@@ -3244,18 +3269,22 @@
     if (!state.ui.updateModalOpen || !payload) {
       return "";
     }
-    const versionText = payload.latestVersion || payload.latestTag || "新版本";
+    const isUpToDate = payload.mode === "upToDate";
+    const versionText = payload.latestVersion || payload.localVersion || payload.latestTag || "最新版本";
     const publishedText = payload.latestPublishedAt ? formatDateTimeLabel(payload.latestPublishedAt) : "未知";
+    const checkedText = payload.checkedAt ? formatDateTimeLabel(payload.checkedAt) : formatDateTimeLabel(new Date().toISOString());
     return `
       <div class="gm-helper-update-modal-mask">
-        <div class="gm-helper-update-modal" role="dialog" aria-modal="true" aria-label="版本更新提醒">
-          <button type="button" class="gm-helper-update-modal-close" data-action="dismiss-update-modal" aria-label="关闭">×</button>
-          <div class="gm-helper-update-modal-title">检测到新版本 ${escapeHtml(versionText)}</div>
-          <div class="gm-helper-update-modal-desc">当前有新的 GitHub Release 可用，建议下载后刷新页面生效。</div>
-          <div class="gm-helper-update-modal-meta">发布时间：${escapeHtml(publishedText)}</div>
+        <div class="gm-helper-update-modal gm-helper-update-modal-centered" role="dialog" aria-modal="true" aria-label="版本更新提醒">
+          <div class="gm-helper-update-modal-content gm-helper-update-modal-content-centered">
+          <div class="gm-helper-update-modal-title">${isUpToDate ? `当前已是最新版本 ${escapeHtml(versionText)}` : `检测到新版本 ${escapeHtml(versionText)}`}</div>
+          <div class="gm-helper-update-modal-desc">${isUpToDate ? "本地版本与远端版本一致，无需更新。" : "当前有新的 GitHub Release 可用，建议下载后刷新页面生效。"}</div>
+          <div class="gm-helper-update-modal-meta">${isUpToDate ? `检查时间：${escapeHtml(checkedText)}` : `发布时间：${escapeHtml(publishedText)}`}</div>
           <div class="gm-helper-button-row">
-            <button type="button" class="gm-helper-button gm-helper-button-accent" data-action="open-release-page" data-url="${escapeHtml(payload.latestUrl)}">去下载更新</button>
-            <button type="button" class="gm-helper-button gm-helper-button-secondary" data-action="dismiss-update-modal">稍后提醒</button>
+            ${isUpToDate
+              ? `<button type="button" class="gm-helper-button gm-helper-button-accent" data-action="dismiss-update-modal">知道了</button>`
+              : `<button type="button" class="gm-helper-button gm-helper-button-accent" data-action="open-release-page" data-url="${escapeHtml(payload.latestUrl)}">去下载更新</button><button type="button" class="gm-helper-button gm-helper-button-secondary" data-action="dismiss-update-modal">稍后提醒</button>`}
+          </div>
           </div>
         </div>
       </div>
@@ -3399,19 +3428,6 @@
         defaultCollapsed: true,
         body: `<div class="gm-helper-form-grid"><div class="gm-helper-field gm-helper-field-grow"><label class="gm-helper-label" for="gm-helper-custom-name">模板名称</label><input id="gm-helper-custom-name" class="gm-helper-input" data-field="customTemplateName" placeholder="例如：日常补偿包" value="${escapeHtml(draft.name)}" /></div><div class="gm-helper-field gm-helper-field-grow"><label class="gm-helper-label" for="gm-helper-custom-content">命令文本</label><textarea id="gm-helper-custom-content" class="gm-helper-textarea" data-field="customTemplateContent" placeholder="支持多行命令，一行一条">${escapeHtml(draft.content)}</textarea></div></div><label class="gm-helper-item-cross gm-helper-template-switch"><input type="checkbox" data-field="customTemplateReplaceUid" ${draft.replaceUid ? "checked" : ""} /><span>使用顶部当前 UID 替换占位符</span></label><div class="gm-helper-button-row"><button type="button" class="gm-helper-button gm-helper-button-accent" data-action="save-custom-template">保存模板</button></div>${customTemplates.length ? `<div class="gm-helper-subtitle">已保存模板</div><div class="gm-helper-template-list">${customTemplates.map((template) => { const previewLine = nonEmptyLines(template.content || "")[0] || ""; const preview = previewLine.length > 72 ? `${previewLine.slice(0, 72)}...` : previewLine; const pinned = quickTemplateIds.has(template.id); return `<div class="gm-helper-template-item"><div class="gm-helper-template-head"><div class="gm-helper-template-title">${escapeHtml(template.name)}</div><span class="gm-helper-badge ${template.replaceUid ? "gm-helper-badge-caution" : "gm-helper-badge-normal"}">${template.replaceUid ? "UID替换" : "原样"}</span></div><div class="gm-helper-inline-tip">${escapeHtml(preview || "（空模板）")}</div><div class="gm-helper-button-row"><button type="button" class="gm-helper-button gm-helper-button-secondary" data-action="apply-custom-template" data-template-id="${escapeHtml(template.id)}">填入后台</button><button type="button" class="gm-helper-button gm-helper-button-secondary" data-action="append-custom-template" data-template-id="${escapeHtml(template.id)}">追加</button><button type="button" class="gm-helper-button gm-helper-button-ghost" data-action="toggle-custom-quick" data-template-id="${escapeHtml(template.id)}">${pinned ? "移出顶部快捷" : "加入顶部快捷"}</button><button type="button" class="gm-helper-button gm-helper-button-danger" data-action="delete-custom-template" data-template-id="${escapeHtml(template.id)}">删除</button></div></div>`; }).join("")}</div>` : `<div class="gm-helper-empty">暂无自定义模板。可先粘贴一组命令并保存，后续点击一次即可直接填入后台输入框。</div>`}`
       })}
-
-      <section class="gm-helper-panel">
-        <div class="gm-helper-section-head">
-          <div>
-            <div class="gm-helper-section-title">版本信息</div>
-            <div class="gm-helper-section-desc">用于确认当前插件与命令配置版本。</div>
-          </div>
-        </div>
-        <div class="gm-helper-info-list">
-          ${renderInfoRow("插件版本", extensionVersion)}
-          ${renderInfoRow("命令配置版本", COMMAND_CONFIG_VERSION)}
-        </div>
-      </section>
 
       <section class="gm-helper-panel">
         <div class="gm-helper-section-head">

@@ -248,12 +248,19 @@
 .gm-helper-update-modal {
   width: 100%;
   max-width: 340px;
+  min-height: 188px;
   background: #ffffff;
   border: 1px solid rgba(16, 24, 40, 0.08);
   border-radius: 14px;
   box-shadow: 0 24px 48px rgba(15, 23, 42, 0.25);
   padding: 14px;
   position: relative;
+  display: flex;
+  align-items: center;
+}
+
+.gm-helper-update-modal-centered {
+  align-items: center;
 }
 
 .gm-helper-update-modal-close {
@@ -276,6 +283,17 @@
   font-weight: 800;
   color: #0f172a;
   padding-right: 28px;
+}
+
+.gm-helper-update-modal-content {
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+}
+
+.gm-helper-update-modal-content-centered {
+  justify-content: center;
+  margin: auto 0;
 }
 
 .gm-helper-update-modal-desc {
