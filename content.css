@@ -689,6 +689,12 @@
   background: rgba(255, 255, 255, 0.88);
 }
 
+.gm-helper-picker-note {
+  font-size: 12px;
+  color: #667085;
+  padding: 0 2px;
+}
+
 .gm-helper-picker-option {
   width: 100%;
   border: none;

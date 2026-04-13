@@ -105,6 +105,7 @@
       buildSimple,
       buildSummonItem,
       buildAddItem,
+      buildSendMail,
       buildSendCustomMail,
       buildRevokeMail
     };
@@ -1159,9 +1160,11 @@
   function onCompositionStart(event) {
     if (event.target?.dataset?.field === "searchQuery") {
       isSearchComposing = true;
+      event.target.dataset.composing = "1";
       return;
     }
     if (event.target?.dataset?.field === "pickerQuery") {
+      event.target.dataset.composing = "1";
       pickerComposingKey = buildPickerComposeKey(event.target.dataset.commandId, event.target.dataset.key);
     }
   }
@@ -1170,6 +1173,7 @@
     const field = event.target?.dataset?.field;
     if (field === "searchQuery") {
       isSearchComposing = false;
+      delete event.target.dataset.composing;
       state.ui.searchQuery = event.target.value;
       clearSuggestionSelection();
       clearItemActionMenu();
@@ -1181,6 +1185,7 @@
     }
     if (field === "pickerQuery") {
       pickerComposingKey = "";
+      delete event.target.dataset.composing;
       const ws = ensureWorkspace(event.target.dataset.commandId);
       ws.pickerQueries[event.target.dataset.key] = event.target.value;
       ws.pickerCursor[event.target.dataset.key] = 0;
@@ -1550,28 +1555,24 @@
       const ws = ensureWorkspace(command.id);
       ws.pickerCursor[node.dataset.key] = Math.max(0, Number(node.dataset.optionIndex || 0));
       render();
-      focusPickerInput(command.id, node.dataset.key, ws.pickerQueries[node.dataset.key] || "");
       await persistState();
       return;
     }
     if (action === "picker-clear" && command) {
       clearPickerSelections(command, node.dataset.key);
       render();
-      focusPickerInput(command.id, node.dataset.key, "");
       await persistState();
       return;
     }
     if (action === "picker-select-all" && command) {
       selectAllPickerOptions(command, node.dataset.key);
       render();
-      focusPickerInput(command.id, node.dataset.key, ensureWorkspace(command.id).pickerQueries[node.dataset.key] || "");
       await persistState();
       return;
     }
     if (action === "picker-invert" && command) {
       invertPickerOptions(command, node.dataset.key);
       render();
-      focusPickerInput(command.id, node.dataset.key, ensureWorkspace(command.id).pickerQueries[node.dataset.key] || "");
       await persistState();
       return;
     }
@@ -1587,7 +1588,6 @@
       }
       clearStatus();
       render();
-      focusPickerInput(command.id, node.dataset.key, ws.pickerQueries[node.dataset.key] || "");
       await persistState();
       return;
     }
@@ -1603,7 +1603,6 @@
       }
       clearStatus();
       render();
-      focusPickerInput(command.id, node.dataset.key, ws.pickerQueries[node.dataset.key] || "");
       await persistState();
       return;
     }
@@ -1620,7 +1619,7 @@
       clearSuggestionSelection();
       clearItemActionMenu();
       clearStatus();
-      if (isSearchComposing) {
+      if (isSearchComposing || target.dataset.composing === "1") {
         return;
       }
       render();
@@ -1652,7 +1651,7 @@
       ws.pickerCursor[target.dataset.key] = 0;
       clearStatus();
       const key = buildPickerComposeKey(target.dataset.commandId, target.dataset.key);
-      if (event.isComposing || pickerComposingKey === key) {
+      if (event.isComposing || target.dataset.composing === "1" || pickerComposingKey === key) {
         await persistState();
         return;
       }
@@ -2930,8 +2929,12 @@
       const emptyHint = getPickerEmptyHint(p, ws, query, options);
       const itemFilterPanel = isItemPickerParam(p) ? renderItemPickerFilters(command, ws, p) : "";
       const isMulti = mode === "picker_multi" || mode === "enum_multi";
-      const showItemImportGuide = isItemPickerParam(p) && normalizeSearch(query || "") && !options.length;
-      const queryPlaceholder = isItemPickerParam(p) ? "输入名称/ID开始搜索，可多选" : (p.placeholder || "输入关键字筛选");
+      const hasQuery = Boolean(normalizeSearch(query || ""));
+      const showItemImportGuide = isItemPickerParam(p) && hasQuery && !options.length;
+      const hideEmptyPickerMenu = isItemPickerParam(p) && !hasQuery && !options.length;
+      const queryPlaceholder = isItemPickerParam(p)
+        ? (isMulti ? "输入名称/ID开始搜索，可多选" : "输入名称/ID开始搜索，单选")
+        : (p.placeholder || "输入关键字筛选");
       return `
         <div class="gm-helper-field gm-helper-field-grow">
           <div class="gm-helper-picker-head">
@@ -2946,12 +2949,14 @@
             ${itemFilterPanel}
             <input class="gm-helper-input" data-field="pickerQuery" data-command-id="${command.id}" data-key="${p.key}" placeholder="${escapeHtml(queryPlaceholder)}" value="${escapeHtml(query)}" />
             ${selected.length ? `<div class="gm-helper-selected-chip-list"><div class="gm-helper-chip-row">${selected.map((id) => `<span class="gm-helper-chip gm-helper-chip-ghost">${escapeHtml(resolveOptionLabel(p, id, ws))}</span>`).join("")}</div></div>` : ""}
-            <div class="gm-helper-picker-menu">
-              ${options.length ? options.map((opt, index) => {
-                const checked = selected.includes(opt.value);
-                return `<button type="button" class="gm-helper-picker-option ${checked ? "gm-helper-picker-option-active" : ""} ${index === cursor ? "gm-helper-picker-option-focused" : ""}" data-action="picker-toggle-option" data-command-id="${command.id}" data-key="${p.key}" data-option-index="${index}" data-value="${escapeHtml(opt.value)}"><span class="gm-helper-picker-option-text">${escapeHtml(opt.label)}</span><span class="gm-helper-picker-check ${checked ? "gm-helper-picker-check-on" : ""}">${checked ? "✓" : ""}</span></button>`;
-              }).join("") : `<div class="gm-helper-empty">${escapeHtml(emptyHint)}</div>${showItemImportGuide ? '<div class="gm-helper-button-row"><button type="button" class="gm-helper-button gm-helper-button-secondary" data-action="goto-settings-import">前往设置页导入 Item.xlsx</button></div>' : ""}`}
-            </div>
+            ${hideEmptyPickerMenu
+              ? (selected.length ? `<div class="gm-helper-picker-note">已选 ${selected.length} 项，继续输入名称/ID可追加。</div>` : "")
+              : `<div class="gm-helper-picker-menu">
+                ${options.length ? options.map((opt, index) => {
+                  const checked = selected.includes(opt.value);
+                  return `<button type="button" class="gm-helper-picker-option ${checked ? "gm-helper-picker-option-active" : ""} ${index === cursor ? "gm-helper-picker-option-focused" : ""}" data-action="picker-toggle-option" data-command-id="${command.id}" data-key="${p.key}" data-option-index="${index}" data-value="${escapeHtml(opt.value)}"><span class="gm-helper-picker-option-text">${escapeHtml(opt.label)}</span><span class="gm-helper-picker-check ${checked ? "gm-helper-picker-check-on" : ""}">${checked ? "✓" : ""}</span></button>`;
+                }).join("") : `<div class="gm-helper-empty">${escapeHtml(emptyHint)}</div>${showItemImportGuide ? '<div class="gm-helper-button-row"><button type="button" class="gm-helper-button gm-helper-button-secondary" data-action="goto-settings-import">前往设置页导入 Item.xlsx</button></div>' : ""}`}
+              </div>`}
           </div>
           ${helper ? `<div class="gm-helper-inline-tip">${escapeHtml(helper)}</div>` : ""}
         </div>
@@ -3216,7 +3221,6 @@
     const normalized = normalizeSearch(query || "");
     const rawQuery = String(query || "").trim().toLowerCase();
     const semanticIntent = String(param.optionSource || "") === "items" ? detectItemSemanticIntent(query) : { active: false };
-    const selectedSet = new Set(selected || []);
     const aliasTokens = Array.isArray(param.aliasTokens) ? param.aliasTokens.map((x) => normalizeSearch(x)).filter(Boolean) : [];
     if (String(param.optionSource || "") === "items") {
       if (!normalized) {
@@ -3248,9 +3252,7 @@
         .sort((left, right) => right.score - left.score || String(left.opt.value).localeCompare(String(right.opt.value), "en"))
         .map((row) => row.opt);
     }
-    const selectedItems = filtered.filter((x) => selectedSet.has(x.value));
-    const rest = filtered.filter((x) => !selectedSet.has(x.value));
-    return [...selectedItems, ...rest].slice(0, 120);
+    return filtered.slice(0, 120);
   }
 
   function getItemOptionByValue(value) {
@@ -3711,6 +3713,29 @@
       output.push(`${command.command} ${uid.value} ${itemId} ${count} ${bind}`);
     }
     return ok(output.join("\n"), output.length);
+  }
+
+  function buildSendMail(command, ws) {
+    const uid = required(command, ws, "uid");
+    const count = required(command, ws, "count");
+    if (!uid.ok || !count.ok) {
+      return uid.ok ? count : uid;
+    }
+    const templateIds = resolveParamValues(getParam(command, "mailTemplateId"), ws);
+    const itemIds = resolveParamValues(getParam(command, "itemId"), ws);
+    if (!templateIds.length) {
+      return fail("请填写“邮件模板ID”");
+    }
+    if (!itemIds.length) {
+      return fail("请填写“附件道具ID”");
+    }
+    const lines = [];
+    for (const templateId of templateIds) {
+      for (const itemId of itemIds) {
+        lines.push(`${command.command} ${uid.value} ${templateId} ${itemId} ${count.value}`);
+      }
+    }
+    return ok(lines.join("\n"), lines.length);
   }
 
   function buildSendCustomMail(command, ws) {
