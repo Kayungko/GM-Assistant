@@ -1187,6 +1187,10 @@
     }
     if (action === "goto-settings-import") {
       state.ui.tab = "settings";
+      state.ui.collapsedSections = {
+        ...(state.ui.collapsedSections || {}),
+        "settings-advanced-import": false
+      };
       clearItemActionMenu();
       clearStatus();
       render();
@@ -1196,6 +1200,10 @@
     }
     if (action === "goto-settings-custom") {
       state.ui.tab = "settings";
+      state.ui.collapsedSections = {
+        ...(state.ui.collapsedSections || {}),
+        "settings-custom-templates": false
+      };
       clearItemActionMenu();
       clearStatus();
       render();
@@ -2371,7 +2379,6 @@
 
   function renderLibraryTop(command) {
     const recentUidChips = state.userContext.recentUids.slice(0, 6);
-    const quickTemplates = getQuickCustomTemplates();
     return `
       <section class="gm-helper-panel gm-helper-top-panel">
         <div class="gm-helper-top-grid">
@@ -2390,9 +2397,6 @@
           <span class="gm-helper-top-hint">${command && command.params.some((p) => p.key === "uid") ? "当前命令可直接复用顶部 UID" : "建议先设置 UID，再进入命令工作台。"}</span>
         </div>
         ${recentUidChips.length ? `<div class="gm-helper-subtitle">最近 UID</div><div class="gm-helper-chip-row">${recentUidChips.map((uid) => `<button type="button" class="gm-helper-chip" data-action="use-uid" data-uid="${escapeHtml(uid)}">${escapeHtml(uid)}</button>`).join("")}</div>` : ""}
-        ${quickTemplates.length
-          ? `<div class="gm-helper-subtitle">自定义快捷</div><div class="gm-helper-chip-row">${quickTemplates.map((item) => `<button type="button" class="gm-helper-chip gm-helper-chip-ghost" data-action="apply-custom-template" data-template-id="${escapeHtml(item.id)}">${escapeHtml(item.name)}</button>`).join("")}</div>`
-          : `<div class="gm-helper-subtitle">自定义快捷</div><div class="gm-helper-chip-row"><button type="button" class="gm-helper-chip gm-helper-chip-ghost" data-action="goto-settings-custom">前往设置配置快捷</button></div>`}
       </section>
     `;
   }
@@ -2537,68 +2541,29 @@
     const quickTemplateIds = new Set(normalizeCustomQuickTemplateIds(state.personalData.customQuickTemplateIds, customTemplates));
     const draft = normalizeCustomTemplateDraft(state.ui.customTemplateDraft);
     return `
-      <section class="gm-helper-panel">
-        <div class="gm-helper-section-head">
-          <div>
-            <div class="gm-helper-section-title">外部数据源</div>
-            <div class="gm-helper-section-desc">可直接绑定项目内的 Item.xlsx 与 Email.xlsx。表更新后手动点击刷新；刷新失败时继续沿用上次成功快照。</div>
-          </div>
-        </div>
-        <div class="gm-helper-template-list gm-helper-external-slot-list">
-          ${renderExternalCatalogSlot("item", "Item.xlsx")}
-          ${renderExternalCatalogSlot("email", "Email.xlsx")}
-          ${renderExternalCatalogSlot("tasks", "Task.xlsx")}
-        </div>
-      </section>
+      ${renderCollapsibleSection({
+        id: "settings-external-catalogs",
+        title: "外部数据源",
+        desc: "可直接绑定项目内的 Item.xlsx、Email.xlsx、Task.xlsx。表更新后手动点击刷新；刷新失败时继续沿用上次成功快照。",
+        defaultCollapsed: false,
+        body: `<div class="gm-helper-template-list gm-helper-external-slot-list">${renderExternalCatalogSlot("item", "Item.xlsx")}${renderExternalCatalogSlot("email", "Email.xlsx")}${renderExternalCatalogSlot("tasks", "Task.xlsx")}</div>`
+      })}
 
-      <section class="gm-helper-panel">
-        <div class="gm-helper-section-head">
-          <div>
-            <div class="gm-helper-section-title">词典导入</div>
-            <div class="gm-helper-section-desc">支持导入 Item / Email 的 .xlsx 或 .json 文件，导入后覆盖当前导入快照。</div>
-          </div>
-        </div>
-        <div class="gm-helper-button-row gm-helper-import-row">
-          <button type="button" id="gm-helper-import-btn" class="gm-helper-button gm-helper-button-secondary" data-action="open-import">导入词典(Item/Email .xlsx/.json)</button>
-          <input id="gm-helper-import-input" data-field="importFile" type="file" accept=".xlsx,.json,application/json,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" class="gm-helper-hidden-file-input" />
-          <span class="gm-helper-inline-tip">当前词典：${escapeHtml(catalogMeta)}${warningMeta ? ` ${escapeHtml(warningMeta)}` : ""}</span>
-        </div>
-        ${catalogLoadWarnings.length ? `<div class="gm-helper-empty">存在 ${catalogLoadWarnings.length} 项词典加载告警，详情请查看控制台日志。</div>` : ""}
-      </section>
+      ${renderCollapsibleSection({
+        id: "settings-advanced-import",
+        title: "高级导入",
+        desc: "用于调试或临时覆盖词典，不作为日常主数据源。",
+        defaultCollapsed: true,
+        body: `<div class="gm-helper-button-row gm-helper-import-row"><button type="button" id="gm-helper-import-btn" class="gm-helper-button gm-helper-button-secondary" data-action="open-import">导入词典(Item/Email .xlsx/.json)</button><input id="gm-helper-import-input" data-field="importFile" type="file" accept=".xlsx,.json,application/json,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" class="gm-helper-hidden-file-input" /><span class="gm-helper-inline-tip">当前词典：${escapeHtml(catalogMeta)}${warningMeta ? ` ${escapeHtml(warningMeta)}` : ""}</span></div>${catalogLoadWarnings.length ? `<div class="gm-helper-empty">存在 ${catalogLoadWarnings.length} 项词典加载告警，详情请查看控制台日志。</div>` : ""}`
+      })}
 
-      <section class="gm-helper-panel">
-        <div class="gm-helper-section-head">
-          <div>
-            <div class="gm-helper-section-title">自定义命令模板</div>
-            <div class="gm-helper-section-desc">粘贴多行命令并命名保存。可开启 UID 占位符替换（支持 {{uid}} / {uid} / 用户ID / 角色UID）。并可管理顶部“自定义快捷”入口。</div>
-          </div>
-        </div>
-        <div class="gm-helper-form-grid">
-          <div class="gm-helper-field gm-helper-field-grow">
-            <label class="gm-helper-label" for="gm-helper-custom-name">模板名称</label>
-            <input id="gm-helper-custom-name" class="gm-helper-input" data-field="customTemplateName" placeholder="例如：日常补偿包" value="${escapeHtml(draft.name)}" />
-          </div>
-          <div class="gm-helper-field gm-helper-field-grow">
-            <label class="gm-helper-label" for="gm-helper-custom-content">命令文本</label>
-            <textarea id="gm-helper-custom-content" class="gm-helper-textarea" data-field="customTemplateContent" placeholder="支持多行命令，一行一条">${escapeHtml(draft.content)}</textarea>
-          </div>
-        </div>
-        <label class="gm-helper-item-cross gm-helper-template-switch">
-          <input type="checkbox" data-field="customTemplateReplaceUid" ${draft.replaceUid ? "checked" : ""} />
-          <span>使用顶部当前 UID 替换占位符</span>
-        </label>
-        <div class="gm-helper-button-row">
-          <button type="button" class="gm-helper-button gm-helper-button-accent" data-action="save-custom-template">保存模板</button>
-        </div>
-        ${customTemplates.length
-          ? `<div class="gm-helper-subtitle">已保存模板</div><div class="gm-helper-template-list">${customTemplates.map((template) => {
-            const previewLine = nonEmptyLines(template.content || "")[0] || "";
-            const preview = previewLine.length > 72 ? `${previewLine.slice(0, 72)}...` : previewLine;
-            const pinned = quickTemplateIds.has(template.id);
-            return `<div class="gm-helper-template-item"><div class="gm-helper-template-head"><div class="gm-helper-template-title">${escapeHtml(template.name)}</div><span class="gm-helper-badge ${template.replaceUid ? "gm-helper-badge-caution" : "gm-helper-badge-normal"}">${template.replaceUid ? "UID替换" : "原样"}</span></div><div class="gm-helper-inline-tip">${escapeHtml(preview || "（空模板）")}</div><div class="gm-helper-button-row"><button type="button" class="gm-helper-button gm-helper-button-secondary" data-action="apply-custom-template" data-template-id="${escapeHtml(template.id)}">填入后台</button><button type="button" class="gm-helper-button gm-helper-button-secondary" data-action="append-custom-template" data-template-id="${escapeHtml(template.id)}">追加</button><button type="button" class="gm-helper-button gm-helper-button-ghost" data-action="toggle-custom-quick" data-template-id="${escapeHtml(template.id)}">${pinned ? "移出顶部快捷" : "加入顶部快捷"}</button><button type="button" class="gm-helper-button gm-helper-button-danger" data-action="delete-custom-template" data-template-id="${escapeHtml(template.id)}">删除</button></div></div>`;
-          }).join("")}</div>`
-          : `<div class="gm-helper-empty">暂无自定义模板。可先粘贴一组命令并保存，后续点击一次即可直接填入后台输入框。</div>`}
-      </section>
+      ${renderCollapsibleSection({
+        id: "settings-custom-templates",
+        title: "自定义命令模板",
+        desc: "粘贴多行命令并命名保存。可开启 UID 占位符替换（支持 {{uid}} / {uid} / 用户ID / 角色UID）。并可管理顶部“自定义快捷”入口。",
+        defaultCollapsed: true,
+        body: `<div class="gm-helper-form-grid"><div class="gm-helper-field gm-helper-field-grow"><label class="gm-helper-label" for="gm-helper-custom-name">模板名称</label><input id="gm-helper-custom-name" class="gm-helper-input" data-field="customTemplateName" placeholder="例如：日常补偿包" value="${escapeHtml(draft.name)}" /></div><div class="gm-helper-field gm-helper-field-grow"><label class="gm-helper-label" for="gm-helper-custom-content">命令文本</label><textarea id="gm-helper-custom-content" class="gm-helper-textarea" data-field="customTemplateContent" placeholder="支持多行命令，一行一条">${escapeHtml(draft.content)}</textarea></div></div><label class="gm-helper-item-cross gm-helper-template-switch"><input type="checkbox" data-field="customTemplateReplaceUid" ${draft.replaceUid ? "checked" : ""} /><span>使用顶部当前 UID 替换占位符</span></label><div class="gm-helper-button-row"><button type="button" class="gm-helper-button gm-helper-button-accent" data-action="save-custom-template">保存模板</button></div>${customTemplates.length ? `<div class="gm-helper-subtitle">已保存模板</div><div class="gm-helper-template-list">${customTemplates.map((template) => { const previewLine = nonEmptyLines(template.content || "")[0] || ""; const preview = previewLine.length > 72 ? `${previewLine.slice(0, 72)}...` : previewLine; const pinned = quickTemplateIds.has(template.id); return `<div class="gm-helper-template-item"><div class="gm-helper-template-head"><div class="gm-helper-template-title">${escapeHtml(template.name)}</div><span class="gm-helper-badge ${template.replaceUid ? "gm-helper-badge-caution" : "gm-helper-badge-normal"}">${template.replaceUid ? "UID替换" : "原样"}</span></div><div class="gm-helper-inline-tip">${escapeHtml(preview || "（空模板）")}</div><div class="gm-helper-button-row"><button type="button" class="gm-helper-button gm-helper-button-secondary" data-action="apply-custom-template" data-template-id="${escapeHtml(template.id)}">填入后台</button><button type="button" class="gm-helper-button gm-helper-button-secondary" data-action="append-custom-template" data-template-id="${escapeHtml(template.id)}">追加</button><button type="button" class="gm-helper-button gm-helper-button-ghost" data-action="toggle-custom-quick" data-template-id="${escapeHtml(template.id)}">${pinned ? "移出顶部快捷" : "加入顶部快捷"}</button><button type="button" class="gm-helper-button gm-helper-button-danger" data-action="delete-custom-template" data-template-id="${escapeHtml(template.id)}">删除</button></div></div>`; }).join("")}</div>` : `<div class="gm-helper-empty">暂无自定义模板。可先粘贴一组命令并保存，后续点击一次即可直接填入后台输入框。</div>`}`
+      })}
 
       <section class="gm-helper-panel">
         <div class="gm-helper-section-head">
