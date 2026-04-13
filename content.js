@@ -6,6 +6,9 @@
 
   const STORAGE_KEY = "gm-helper-state-v2";
   const COMMAND_CONFIG_VERSION = "v1-core-2026-04-09";
+  const GITHUB_RELEASE_LATEST_API = "https://api.github.com/repos/Kayungko/GM-Assistant/releases/latest";
+  const REPO_RELEASE_PAGE_URL = "https://github.com/Kayungko/GM-Assistant/releases";
+  const UPDATE_CHECK_INTERVAL_MS = 24 * 60 * 60 * 1000;
   const FAB_ICON_PATH = "floatingBall.png";
   const CATALOG_REGISTRY_PATH = "data/catalogs/registry.json";
   const CATALOG_REGISTRY_SCHEMA = "gm-helper-registry-v1";
@@ -136,6 +139,19 @@
         email: { items: [], mail: [], tasks: [], common: [] },
         tasks: { items: [], mail: [], tasks: [], common: [] }
       },
+      updateCheck: {
+        lastCheckedAt: "",
+        lastStatus: "idle",
+        lastError: "",
+        latestVersion: "",
+        latestTag: "",
+        latestUrl: "",
+        latestPublishedAt: "",
+        latestName: "",
+        lastShownVersion: "",
+        lastDismissedAt: "",
+        lastResult: "idle"
+      },
       customTemplates: [],
       customQuickTemplateIds: []
     },
@@ -149,6 +165,8 @@
       suggestionSelection: [],
       itemActionMenu: { itemId: "", itemName: "" },
       customTemplateDraft: { name: "", content: "", replaceUid: true },
+      updateModalOpen: false,
+      updateModalPayload: null,
       runtimeInvalidated: false,
       runtimeInvalidatedHintShown: false,
       status: null,
@@ -164,6 +182,8 @@
   let isSearchComposing = false;
   let pickerComposingKey = "";
   let fabDragState = null;
+  let updateCheckPromise = null;
+  const dismissedUpdateVersionsInSession = new Set();
   let catalogStore = createEmptyCatalogStore();
   let catalogLoadWarnings = [];
 
@@ -247,6 +267,7 @@
     bindFocusTracking();
     bindWindowResize();
     render();
+    void maybeAutoCheckLatestRelease();
   }
 
   async function restoreState() {
@@ -354,6 +375,44 @@
     };
   }
 
+  function normalizeUpdateCheckState(raw) {
+    const next = raw && typeof raw === "object" ? raw : {};
+    const lastStatus = String(next.lastStatus || "idle").trim();
+    const lastResult = String(next.lastResult || "idle").trim();
+    return {
+      lastCheckedAt: String(next.lastCheckedAt || "").trim(),
+      lastStatus: ["idle", "success", "failed", "incomparable"].includes(lastStatus) ? lastStatus : "idle",
+      lastError: String(next.lastError || "").trim(),
+      latestVersion: normalizeVersion(next.latestVersion || ""),
+      latestTag: String(next.latestTag || "").trim(),
+      latestUrl: String(next.latestUrl || "").trim(),
+      latestPublishedAt: String(next.latestPublishedAt || "").trim(),
+      latestName: String(next.latestName || "").trim(),
+      lastShownVersion: normalizeVersion(next.lastShownVersion || ""),
+      lastDismissedAt: String(next.lastDismissedAt || "").trim(),
+      lastResult: ["idle", "upToDate", "updateAvailable", "failed", "incomparable"].includes(lastResult) ? lastResult : "idle"
+    };
+  }
+
+  function normalizeUpdateModalPayload(payload) {
+    if (!payload || typeof payload !== "object") {
+      return null;
+    }
+    const latestVersion = normalizeVersion(payload.latestVersion || "");
+    const latestTag = String(payload.latestTag || "").trim();
+    const latestUrl = String(payload.latestUrl || "").trim();
+    if (!latestVersion && !latestTag) {
+      return null;
+    }
+    return {
+      latestVersion,
+      latestTag,
+      latestUrl: latestUrl || (latestTag ? `${REPO_RELEASE_PAGE_URL}/tag/${encodeURIComponent(latestTag)}` : REPO_RELEASE_PAGE_URL),
+      latestPublishedAt: String(payload.latestPublishedAt || "").trim(),
+      latestName: String(payload.latestName || "").trim()
+    };
+  }
+
   function normalizeCustomTemplates(list) {
     if (!Array.isArray(list)) {
       return [];
@@ -423,6 +482,7 @@
     state.personalData.importedCatalogs = normalizeImportedCatalogs(state.personalData.importedCatalogs);
     state.personalData.externalCatalogBindings = normalizeExternalCatalogBindings(state.personalData.externalCatalogBindings);
     state.personalData.externalCatalogSnapshots = normalizeExternalCatalogSnapshots(state.personalData.externalCatalogSnapshots);
+    state.personalData.updateCheck = normalizeUpdateCheckState(state.personalData.updateCheck);
     if (Object.prototype.hasOwnProperty.call(state.personalData, "customTemplateSeeded")) {
       delete state.personalData.customTemplateSeeded;
     }
@@ -452,6 +512,8 @@
     state.ui.itemActionMenu = normalizeItemActionMenu(state.ui.itemActionMenu);
     state.ui.suggestionSelection = normalizeSuggestionSelection(state.ui.suggestionSelection);
     state.ui.customTemplateDraft = normalizeCustomTemplateDraft(state.ui.customTemplateDraft);
+    state.ui.updateModalOpen = Boolean(state.ui.updateModalOpen);
+    state.ui.updateModalPayload = normalizeUpdateModalPayload(state.ui.updateModalPayload);
     state.ui.runtimeInvalidated = Boolean(state.ui.runtimeInvalidated);
     state.ui.runtimeInvalidatedHintShown = Boolean(state.ui.runtimeInvalidatedHintShown);
     state.ui.searchSuggestions = { query: "", commands: [], items: [] };
@@ -1008,6 +1070,242 @@
     });
   }
 
+  function normalizeVersion(tagOrVersion) {
+    const text = String(tagOrVersion || "").trim().replace(/^v/i, "");
+    if (!/^\d+(\.\d+){0,2}$/.test(text)) {
+      return "";
+    }
+    const parts = text.split(".").map((x) => Number(x));
+    while (parts.length < 3) {
+      parts.push(0);
+    }
+    if (parts.some((value) => !Number.isInteger(value) || value < 0)) {
+      return "";
+    }
+    return parts.join(".");
+  }
+
+  function compareSemver(left, right) {
+    const a = normalizeVersion(left);
+    const b = normalizeVersion(right);
+    if (!a || !b) {
+      return null;
+    }
+    const av = a.split(".").map((x) => Number(x));
+    const bv = b.split(".").map((x) => Number(x));
+    for (let index = 0; index < 3; index += 1) {
+      if (av[index] > bv[index]) {
+        return 1;
+      }
+      if (av[index] < bv[index]) {
+        return -1;
+      }
+    }
+    return 0;
+  }
+
+  function shouldUseCachedUpdateCheck(force, updateCheck) {
+    if (force) {
+      return false;
+    }
+    const checkedAt = Date.parse(String(updateCheck?.lastCheckedAt || ""));
+    if (!Number.isFinite(checkedAt)) {
+      return false;
+    }
+    return (Date.now() - checkedAt) < UPDATE_CHECK_INTERVAL_MS;
+  }
+
+  function simplifyUpdateCheckError(error) {
+    const text = String(error?.message || error || "").trim();
+    if (!text) {
+      return "未知错误";
+    }
+    if (text.includes("HTTP 404")) {
+      return "仓库暂无正式 Release";
+    }
+    if (text.includes("HTTP 403")) {
+      return "请求受限（HTTP 403），请稍后重试";
+    }
+    return text;
+  }
+
+  function evaluateUpdateResult(localVersionRaw, latestVersion) {
+    const cmp = compareSemver(latestVersion, localVersionRaw);
+    if (cmp === null) {
+      return "incomparable";
+    }
+    return cmp > 0 ? "updateAvailable" : "upToDate";
+  }
+
+  function buildUpdateResultFromSnapshot(snapshot, localVersionRaw) {
+    let status = "failed";
+    if (snapshot.latestVersion) {
+      status = evaluateUpdateResult(localVersionRaw, snapshot.latestVersion);
+    } else if (snapshot.lastResult === "incomparable" || snapshot.lastStatus === "incomparable") {
+      status = "incomparable";
+    } else if (snapshot.lastResult === "upToDate" || snapshot.lastResult === "updateAvailable") {
+      status = snapshot.lastResult;
+    } else if (snapshot.lastStatus === "success") {
+      status = "upToDate";
+    }
+    return {
+      status,
+      localVersion: normalizeVersion(localVersionRaw),
+      latestVersion: snapshot.latestVersion,
+      latestTag: snapshot.latestTag,
+      latestUrl: snapshot.latestUrl || (snapshot.latestTag ? `${REPO_RELEASE_PAGE_URL}/tag/${encodeURIComponent(snapshot.latestTag)}` : REPO_RELEASE_PAGE_URL),
+      latestPublishedAt: snapshot.latestPublishedAt,
+      latestName: snapshot.latestName,
+      error: snapshot.lastError || ""
+    };
+  }
+
+  function maybeOpenUpdateModal(result) {
+    if (!result || result.status !== "updateAvailable") {
+      return false;
+    }
+    const latestVersion = normalizeVersion(result.latestVersion || result.latestTag);
+    if (!latestVersion) {
+      return false;
+    }
+    if (dismissedUpdateVersionsInSession.has(latestVersion)) {
+      return false;
+    }
+    if (state.ui.updateModalOpen && normalizeVersion(state.ui.updateModalPayload?.latestVersion || state.ui.updateModalPayload?.latestTag) === latestVersion) {
+      return false;
+    }
+    state.ui.updateModalOpen = true;
+    state.ui.updateModalPayload = normalizeUpdateModalPayload({
+      latestVersion,
+      latestTag: result.latestTag || latestVersion,
+      latestUrl: result.latestUrl || REPO_RELEASE_PAGE_URL,
+      latestPublishedAt: result.latestPublishedAt || "",
+      latestName: result.latestName || ""
+    });
+    state.personalData.updateCheck.lastShownVersion = latestVersion;
+    return true;
+  }
+
+  function dismissUpdateModal() {
+    const version = normalizeVersion(state.ui.updateModalPayload?.latestVersion || state.ui.updateModalPayload?.latestTag);
+    if (version) {
+      dismissedUpdateVersionsInSession.add(version);
+    }
+    state.ui.updateModalOpen = false;
+    state.ui.updateModalPayload = null;
+    state.personalData.updateCheck.lastDismissedAt = new Date().toISOString();
+  }
+
+  function openReleasePage(url) {
+    const target = String(url || REPO_RELEASE_PAGE_URL).trim() || REPO_RELEASE_PAGE_URL;
+    try {
+      window.open(target, "_blank", "noopener,noreferrer");
+    } catch (error) {
+      window.location.href = target;
+    }
+  }
+
+  async function checkLatestRelease(options) {
+    const force = Boolean(options?.force);
+    const allowModal = options?.allowModal !== false;
+
+    if (updateCheckPromise) {
+      return updateCheckPromise;
+    }
+
+    updateCheckPromise = (async () => {
+      const snapshot = normalizeUpdateCheckState(state.personalData.updateCheck);
+      const localVersionRaw = state.ui.runtimeInvalidated ? "unknown" : getExtensionVersionSafe();
+      if (shouldUseCachedUpdateCheck(force, snapshot)) {
+        const cachedResult = buildUpdateResultFromSnapshot(snapshot, localVersionRaw);
+        if (allowModal) {
+          maybeOpenUpdateModal(cachedResult);
+        }
+        return cachedResult;
+      }
+
+      const checkedAt = new Date().toISOString();
+      try {
+        const payload = await fetchJson(GITHUB_RELEASE_LATEST_API);
+        const latestTag = String(payload?.tag_name || "").trim();
+        if (!latestTag) {
+          throw new Error("仓库暂无正式 Release");
+        }
+        const latestVersion = normalizeVersion(latestTag);
+        if (!latestVersion) {
+          throw new Error(`Release tag 格式不支持：${latestTag}`);
+        }
+        const latestUrl = String(payload?.html_url || "").trim() || `${REPO_RELEASE_PAGE_URL}/tag/${encodeURIComponent(latestTag)}`;
+        const latestPublishedAt = String(payload?.published_at || "").trim();
+        const latestName = String(payload?.name || "").trim();
+        const status = evaluateUpdateResult(localVersionRaw, latestVersion);
+
+        state.personalData.updateCheck = normalizeUpdateCheckState({
+          ...snapshot,
+          lastCheckedAt: checkedAt,
+          lastStatus: status === "incomparable" ? "incomparable" : "success",
+          lastError: "",
+          latestVersion,
+          latestTag,
+          latestUrl,
+          latestPublishedAt,
+          latestName,
+          lastResult: status
+        });
+
+        const result = {
+          status,
+          localVersion: normalizeVersion(localVersionRaw),
+          latestVersion,
+          latestTag,
+          latestUrl,
+          latestPublishedAt,
+          latestName,
+          error: ""
+        };
+        if (allowModal) {
+          maybeOpenUpdateModal(result);
+        }
+        return result;
+      } catch (error) {
+        const message = simplifyUpdateCheckError(error);
+        state.personalData.updateCheck = normalizeUpdateCheckState({
+          ...snapshot,
+          lastCheckedAt: checkedAt,
+          lastStatus: "failed",
+          lastError: message,
+          lastResult: "failed"
+        });
+        return {
+          status: "failed",
+          localVersion: normalizeVersion(localVersionRaw),
+          latestVersion: snapshot.latestVersion,
+          latestTag: snapshot.latestTag,
+          latestUrl: snapshot.latestUrl || REPO_RELEASE_PAGE_URL,
+          latestPublishedAt: snapshot.latestPublishedAt,
+          latestName: snapshot.latestName,
+          error: message
+        };
+      }
+    })();
+
+    try {
+      return await updateCheckPromise;
+    } finally {
+      updateCheckPromise = null;
+    }
+  }
+
+  async function maybeAutoCheckLatestRelease() {
+    const beforeOpen = state.ui.updateModalOpen;
+    const result = await checkLatestRelease({ force: false, trigger: "auto", allowModal: true });
+    const needRender = (!beforeOpen && state.ui.updateModalOpen) || state.ui.tab === "settings";
+    if (needRender) {
+      render();
+    }
+    await persistState();
+  }
+
   function injectUI() {
     const fab = document.createElement("button");
     fab.id = "gm-helper-fab";
@@ -1240,6 +1538,8 @@
         state.ui.tab = tab;
         if (tab === "library") {
           state.ui.libraryView = "list";
+        } else {
+          void maybeAutoCheckLatestRelease();
         }
       }
       clearItemActionMenu();
@@ -1453,6 +1753,32 @@
         input.value = "";
         input.click();
       }
+      return;
+    }
+    if (action === "update-check-now") {
+      const result = await checkLatestRelease({ force: true, trigger: "manual", allowModal: true });
+      if (result.status === "updateAvailable") {
+        setStatus(`发现新版本 ${result.latestVersion || result.latestTag}，可前往 Release 页面更新`, "success");
+      } else if (result.status === "upToDate") {
+        setStatus("已是最新版本", "success");
+      } else if (result.status === "incomparable") {
+        setStatus("版本格式无法比较，请确认 manifest.version 与 tag 格式", "error");
+      } else {
+        setStatus(`检查更新失败：${result.error || "未知错误"}`, "error");
+      }
+      render();
+      await persistState();
+      return;
+    }
+    if (action === "open-release-page") {
+      const targetUrl = String(node.dataset.url || "").trim();
+      openReleasePage(targetUrl || getReleasePageUrlFromUpdateState());
+      return;
+    }
+    if (action === "dismiss-update-modal") {
+      dismissUpdateModal();
+      render();
+      await persistState();
       return;
     }
     if (action === "toggle-favorite") {
@@ -2348,6 +2674,7 @@
     const shouldShowSuggestionPanel = isLibraryTab && Boolean(searchQuery);
     const title = isWorkspaceView ? escapeHtml(command?.title || "命令工作台") : escapeHtml(getTabTitle(state.ui.tab));
     const libraryHtml = `${renderLibraryTop(command)}${shouldShowSuggestionPanel ? renderSearchSuggestionPanel(suggestions) : ""}${isWorkspaceView ? renderWorkspace(command, ws) : renderLibraryList(results, suggestions)}`;
+    const updateModalHtml = renderUpdateModal();
     sidebar.innerHTML = `
       <div class="gm-helper-wrap">
         ${renderRail()}
@@ -2368,6 +2695,7 @@
           </div>
           <div class="gm-helper-footer ${state.ui.status?.kind === "error" ? "gm-helper-footer-error" : ""}">${escapeHtml(state.ui.status?.message || "系统已就绪，请选择场景开始操作。")}</div>
         </div>
+        ${updateModalHtml}
       </div>
     `;
     restoreBodyScrollState(bodyScrollState);
@@ -2648,6 +2976,105 @@
     return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${pad(date.getHours())}:${pad(date.getMinutes())}`;
   }
 
+  function getUpdateCheckState() {
+    const updateCheck = normalizeUpdateCheckState(state.personalData.updateCheck);
+    const localVersionRaw = state.ui.runtimeInvalidated ? "unknown" : getExtensionVersionSafe();
+    const localVersion = normalizeVersion(localVersionRaw);
+    let result = updateCheck.lastResult || "idle";
+    if (updateCheck.latestVersion) {
+      const cmp = compareSemver(updateCheck.latestVersion, localVersionRaw);
+      if (cmp === null) {
+        result = "incomparable";
+      } else if (cmp > 0) {
+        result = "updateAvailable";
+      } else {
+        result = "upToDate";
+      }
+    } else if (updateCheck.lastStatus === "failed") {
+      result = "failed";
+    } else if (updateCheck.lastStatus === "incomparable") {
+      result = "incomparable";
+    }
+    return {
+      ...updateCheck,
+      localVersionRaw,
+      localVersion,
+      result,
+      latestUrlResolved: updateCheck.latestUrl || (updateCheck.latestTag ? `${REPO_RELEASE_PAGE_URL}/tag/${encodeURIComponent(updateCheck.latestTag)}` : REPO_RELEASE_PAGE_URL)
+    };
+  }
+
+  function getReleasePageUrlFromUpdateState() {
+    return getUpdateCheckState().latestUrlResolved || REPO_RELEASE_PAGE_URL;
+  }
+
+  function updateResultLabel(result) {
+    if (result === "updateAvailable") {
+      return "发现新版本";
+    }
+    if (result === "upToDate") {
+      return "已是最新版本";
+    }
+    if (result === "failed") {
+      return "检查失败";
+    }
+    if (result === "incomparable") {
+      return "无法比较";
+    }
+    return "尚未检查";
+  }
+
+  function renderUpdateCheckPanel(extensionVersion) {
+    const update = getUpdateCheckState();
+    const latestLabel = update.latestVersion || update.latestTag || "暂无 Release";
+    const publishedLabel = update.latestPublishedAt ? formatDateTimeLabel(update.latestPublishedAt) : "未知";
+    return `
+      <section class="gm-helper-panel">
+        <div class="gm-helper-section-head">
+          <div>
+            <div class="gm-helper-section-title">版本更新</div>
+            <div class="gm-helper-section-desc">每日自动检测一次，也可手动立即检查。</div>
+          </div>
+        </div>
+        <div class="gm-helper-info-list">
+          ${renderInfoRow("当前版本", extensionVersion)}
+          ${renderInfoRow("最新版本", latestLabel)}
+          ${renderInfoRow("发布时间", publishedLabel)}
+          ${renderInfoRow("最近检查", formatDateTimeLabel(update.lastCheckedAt))}
+          ${renderInfoRow("检查状态", updateResultLabel(update.result))}
+        </div>
+        ${update.lastError ? `<div class="gm-helper-empty">最近一次检查失败：${escapeHtml(update.lastError)}</div>` : ""}
+        <div class="gm-helper-button-row">
+          <button type="button" class="gm-helper-button gm-helper-button-accent" data-action="update-check-now">立即检查更新</button>
+          <button type="button" class="gm-helper-button gm-helper-button-secondary" data-action="open-release-page" data-url="${escapeHtml(update.latestUrlResolved)}">打开 Release 页面</button>
+        </div>
+      </section>
+    `;
+  }
+
+  function renderUpdateModal() {
+    const payload = normalizeUpdateModalPayload(state.ui.updateModalPayload);
+    if (!state.ui.updateModalOpen || !payload) {
+      return "";
+    }
+    const versionText = payload.latestVersion || payload.latestTag || "新版本";
+    const publishedText = payload.latestPublishedAt ? formatDateTimeLabel(payload.latestPublishedAt) : "未知";
+    return `
+      <div class="gm-helper-update-modal-mask">
+        <div class="gm-helper-update-modal" role="dialog" aria-modal="true" aria-label="版本更新提醒">
+          <button type="button" class="gm-helper-update-modal-close" data-action="dismiss-update-modal" aria-label="关闭">×</button>
+          <div class="gm-helper-update-modal-title">检测到新版本 ${escapeHtml(versionText)}</div>
+          <div class="gm-helper-update-modal-desc">当前有新的 GitHub Release 可用，建议下载后刷新页面生效。</div>
+          <div class="gm-helper-update-modal-meta">发布时间：${escapeHtml(publishedText)}</div>
+          <div class="gm-helper-button-row">
+            <button type="button" class="gm-helper-button gm-helper-button-accent" data-action="open-release-page" data-url="${escapeHtml(payload.latestUrl)}">去下载更新</button>
+            <button type="button" class="gm-helper-button gm-helper-button-secondary" data-action="dismiss-update-modal">稍后提醒</button>
+          </div>
+        </div>
+      </div>
+    `;
+  }
+
   function externalBindingStatusLabel(binding) {
     if (!binding) {
       return "未绑定";
@@ -2754,6 +3181,8 @@
     const quickTemplateIds = new Set(normalizeCustomQuickTemplateIds(state.personalData.customQuickTemplateIds, customTemplates));
     const draft = normalizeCustomTemplateDraft(state.ui.customTemplateDraft);
     return `
+      ${renderUpdateCheckPanel(extensionVersion)}
+
       ${renderCollapsibleSection({
         id: "settings-external-catalogs",
         title: "外部数据源",
