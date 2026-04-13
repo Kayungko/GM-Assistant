@@ -326,6 +326,26 @@
   margin-top: 10px;
 }
 
+.gm-helper-selected-chip-list {
+  max-height: 160px;
+  overflow-y: auto;
+  padding-right: 4px;
+  overscroll-behavior: contain;
+}
+
+.gm-helper-selected-chip-list::-webkit-scrollbar {
+  width: 8px;
+}
+
+.gm-helper-selected-chip-list::-webkit-scrollbar-thumb {
+  border-radius: 999px;
+  background: rgba(16, 24, 40, 0.14);
+}
+
+.gm-helper-selected-chip-list::-webkit-scrollbar-track {
+  background: transparent;
+}
+
 .gm-helper-chip {
   border: none;
   border-radius: 999px;
@@ -509,6 +529,23 @@
   display: flex;
   flex-direction: column;
   gap: 6px;
+  max-height: 300px;
+  overflow-y: auto;
+  padding-right: 4px;
+  overscroll-behavior: contain;
+}
+
+.gm-helper-suggest-item-list::-webkit-scrollbar {
+  width: 8px;
+}
+
+.gm-helper-suggest-item-list::-webkit-scrollbar-thumb {
+  border-radius: 999px;
+  background: rgba(16, 24, 40, 0.14);
+}
+
+.gm-helper-suggest-item-list::-webkit-scrollbar-track {
+  background: transparent;
 }
 
 .gm-helper-suggest-item {

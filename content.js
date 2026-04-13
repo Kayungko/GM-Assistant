@@ -1301,6 +1301,7 @@
         return;
       }
       clearItemActionMenu();
+      resetWorkspaceForSuggestion(targetCommandId);
       openWorkspace(targetCommandId);
       applyItemSuggestionToCommand(targetCommandId, itemId);
       setStatus(`已打开命令并预填道具 ${itemId}`, "success");
@@ -1361,6 +1362,7 @@
         return;
       }
       clearItemActionMenu();
+      resetWorkspaceForSuggestion(targetCommandId);
       openWorkspace(targetCommandId);
       applyItemSuggestionToCommand(targetCommandId, selectedItemIds);
       setStatus(`已打开命令并预填 ${selectedItemIds.length} 个道具`, "success");
@@ -1374,7 +1376,12 @@
         return;
       }
       clearItemActionMenu();
+      resetWorkspaceForSuggestion(targetCommandId);
       openWorkspace(targetCommandId);
+      const selectedItemIds = getSelectedSuggestionItemIds(state.ui.searchSuggestions);
+      if (selectedItemIds.length) {
+        applyItemSuggestionToCommand(targetCommandId, selectedItemIds);
+      }
       clearStatus();
       render();
       await persistState();
@@ -2455,6 +2462,10 @@
       return false;
     }
     const ws = ensureWorkspace(commandId);
+    const compatibleMode = resolveSuggestionBatchMode(command);
+    if (compatibleMode) {
+      ws.batchMode = compatibleMode;
+    }
     const targetParam = command.params.find((param) => String(param.optionSource || "") === "items" && shouldShowParam(param, ws.batchMode));
     if (!targetParam) {
       return false;
@@ -2463,6 +2474,7 @@
     if (!values.length) {
       return false;
     }
+    ws.output = "";
     const mode = targetParam.inputMode || targetParam.type;
     if (mode === "picker_multi" || mode === "enum_multi") {
       ws.multiValues[targetParam.key] = values;
@@ -2488,6 +2500,25 @@
       ws.pickerCursor[targetParam.key] = 0;
     }
     return true;
+  }
+
+  function resolveSuggestionBatchMode(command) {
+    if (!command?.params?.length) {
+      return "";
+    }
+    const visibleMatch = (modeId) => command.params.some((param) => String(param.optionSource || "") === "items" && shouldShowParam(param, modeId));
+    if (command.batchModes?.length) {
+      const matched = command.batchModes.find((mode) => visibleMatch(mode.id));
+      return matched?.id || command.batchModes[0]?.id || "";
+    }
+    return visibleMatch("") ? "" : "";
+  }
+
+  function resetWorkspaceForSuggestion(commandId) {
+    if (!COMMAND_MAP.has(commandId)) {
+      return;
+    }
+    state.workspaces[commandId] = createWorkspace(commandId);
   }
 
   function getSelectedSuggestionItemIds(suggestions) {
@@ -2914,7 +2945,7 @@
           <div class="gm-helper-picker">
             ${itemFilterPanel}
             <input class="gm-helper-input" data-field="pickerQuery" data-command-id="${command.id}" data-key="${p.key}" placeholder="${escapeHtml(queryPlaceholder)}" value="${escapeHtml(query)}" />
-            ${selected.length ? `<div class="gm-helper-chip-row">${selected.map((id) => `<span class="gm-helper-chip gm-helper-chip-ghost">${escapeHtml(resolveOptionLabel(p, id, ws))}</span>`).join("")}</div>` : ""}
+            ${selected.length ? `<div class="gm-helper-selected-chip-list"><div class="gm-helper-chip-row">${selected.map((id) => `<span class="gm-helper-chip gm-helper-chip-ghost">${escapeHtml(resolveOptionLabel(p, id, ws))}</span>`).join("")}</div></div>` : ""}
             <div class="gm-helper-picker-menu">
               ${options.length ? options.map((opt, index) => {
                 const checked = selected.includes(opt.value);
@@ -3426,9 +3457,16 @@
       return [];
     }
     const semanticIntent = detectItemSemanticIntent(query);
+    const allItems = catalogStore.itemOptions || [];
+    const exactSemanticItems = semanticIntent.active
+      ? allItems.filter((item) => matchesItemSemanticIntent(item, semanticIntent))
+      : [];
+    const fallbackSemanticItems = semanticIntent.active && !exactSemanticItems.length
+      ? allItems.filter((item) => matchesItemSemanticIntent(item, semanticIntent, { ignoreQuality: true }) && !getSemanticComparableQualityId(item))
+      : [];
     const sourceItems = semanticIntent.active
-      ? (catalogStore.itemOptions || []).filter((item) => matchesItemSemanticIntent(item, semanticIntent, { ignoreQuality: true }))
-      : (catalogStore.itemOptions || []);
+      ? (exactSemanticItems.length ? exactSemanticItems : fallbackSemanticItems)
+      : allItems;
     const rows = [];
     sourceItems.forEach((item) => {
       const semanticScore = scoreItemSemanticIntent(item, semanticIntent);
@@ -3443,8 +3481,11 @@
         score
       });
     });
-    if (semanticIntent.active && !rows.length) {
-      return sourceItems
+    if (semanticIntent.active && exactSemanticItems.length) {
+      return rows.sort((left, right) => right.score - left.score || String(left.itemId).localeCompare(String(right.itemId), "en"));
+    }
+    if (semanticIntent.active && !rows.length && fallbackSemanticItems.length) {
+      return fallbackSemanticItems
         .map((item) => ({
           itemId: item.id,
           name: item.name || item.id,
