@@ -2672,14 +2672,6 @@
       })}
 
       ${renderCollapsibleSection({
-        id: `workspace-presets-${command.id}`,
-        title: "预设模板",
-        desc: "可按命令保存参数快照，便于复用常见礼包、邮件与资源配置。",
-        defaultCollapsed: true,
-        body: `<div class="gm-helper-form-grid"><div class="gm-helper-field gm-helper-field-grow"><label class="gm-helper-label">预设名称</label><input class="gm-helper-input" data-field="presetDraftName" data-command-id="${command.id}" placeholder="例如：新号启动资源包" value="${escapeHtml(ws.presetDraftName)}" /></div><div class="gm-helper-field gm-helper-field-grow"><label class="gm-helper-label">已保存预设</label><select class="gm-helper-select" data-field="selectedPresetId" data-command-id="${command.id}"><option value="">请选择预设</option>${getPresets(command.id).map((preset) => `<option value="${escapeHtml(preset.id)}" ${ws.selectedPresetId === preset.id ? "selected" : ""}>${escapeHtml(preset.name)}</option>`).join("")}</select></div></div><div class="gm-helper-button-row"><button type="button" class="gm-helper-button gm-helper-button-accent" data-action="save-preset" data-command-id="${command.id}">保存预设</button><button type="button" class="gm-helper-button gm-helper-button-secondary" data-action="load-preset" data-command-id="${command.id}">加载预设</button><button type="button" class="gm-helper-button gm-helper-button-danger" data-action="delete-preset" data-command-id="${command.id}">删除预设</button></div>`
-      })}
-
-      ${renderCollapsibleSection({
         id: `workspace-output-${command.id}`,
         title: "结果预览",
         desc: "生成结果可复制、填入或追加至后台输入框；默认不自动发送。",
