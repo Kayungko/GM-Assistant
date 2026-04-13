@@ -7,7 +7,11 @@
   const STORAGE_KEY = "gm-helper-state-v2";
   const COMMAND_CONFIG_VERSION = "v1-core-2026-04-09";
   const GITHUB_RELEASE_LATEST_API = "https://api.github.com/repos/Kayungko/GM-Assistant/releases/latest";
+  const GITHUB_TAGS_API = "https://api.github.com/repos/Kayungko/GM-Assistant/tags?per_page=1";
+  const GITHUB_TAGS_PAGE_URL = "https://github.com/Kayungko/GM-Assistant/tags";
+  const REPO_MANIFEST_RAW_URL = "https://raw.githubusercontent.com/Kayungko/GM-Assistant/main/manifest.json";
   const REPO_RELEASE_PAGE_URL = "https://github.com/Kayungko/GM-Assistant/releases";
+  const REPO_RELEASE_LATEST_PAGE_URL = "https://github.com/Kayungko/GM-Assistant/releases/latest";
   const UPDATE_CHECK_INTERVAL_MS = 24 * 60 * 60 * 1000;
   const FAB_ICON_PATH = "floatingBall.png";
   const CATALOG_REGISTRY_PATH = "data/catalogs/registry.json";
@@ -145,6 +149,7 @@
         lastError: "",
         latestVersion: "",
         latestTag: "",
+        latestSource: "",
         latestUrl: "",
         latestPublishedAt: "",
         latestName: "",
@@ -267,7 +272,6 @@
     bindFocusTracking();
     bindWindowResize();
     render();
-    void maybeAutoCheckLatestRelease();
   }
 
   async function restoreState() {
@@ -385,6 +389,7 @@
       lastError: String(next.lastError || "").trim(),
       latestVersion: normalizeVersion(next.latestVersion || ""),
       latestTag: String(next.latestTag || "").trim(),
+      latestSource: String(next.latestSource || "").trim(),
       latestUrl: String(next.latestUrl || "").trim(),
       latestPublishedAt: String(next.latestPublishedAt || "").trim(),
       latestName: String(next.latestName || "").trim(),
@@ -1120,13 +1125,180 @@
     if (!text) {
       return "未知错误";
     }
-    if (text.includes("HTTP 404")) {
-      return "仓库暂无正式 Release";
-    }
     if (text.includes("HTTP 403")) {
-      return "请求受限（HTTP 403），请稍后重试";
+      return "请求受限（HTTP 403），已尝试多源兜底，请稍后重试";
+    }
+    if (text.includes("HTTP 404")) {
+      return "未找到可用版本信息（HTTP 404）";
     }
     return text;
+  }
+
+  function composeUpdateFetchError(errors) {
+    const list = (Array.isArray(errors) ? errors : [])
+      .map((item) => String(item || "").trim())
+      .filter(Boolean);
+    if (!list.length) {
+      return "未获取到可用版本信息";
+    }
+    return list.slice(0, 3).join(" | ");
+  }
+
+  function extractTagFromTagsHtml(html) {
+    const text = String(html || "");
+    if (!text) {
+      return "";
+    }
+    const matched = text.match(/\/tag\/(v?\d+(?:\.\d+){1,2})/i);
+    if (!matched?.[1]) {
+      return "";
+    }
+    return matched[1];
+  }
+
+  function extractLatestReleaseFromHtml(html) {
+    const text = String(html || "");
+    if (!text) {
+      return null;
+    }
+    const tagMatch = text.match(/\/Kayungko\/GM-Assistant\/releases\/tag\/(v?\d+(?:\.\d+){1,2})/i)
+      || text.match(/\/releases\/tag\/(v?\d+(?:\.\d+){1,2})/i);
+    if (!tagMatch?.[1]) {
+      return null;
+    }
+    const latestTag = String(tagMatch[1]).trim();
+    const latestVersion = normalizeVersion(latestTag);
+    if (!latestVersion) {
+      return null;
+    }
+    const datetimeMatch = text.match(/<relative-time[^>]*datetime="([^"]+)"/i);
+    return {
+      latestTag,
+      latestVersion,
+      latestPublishedAt: String(datetimeMatch?.[1] || "").trim(),
+      latestName: ""
+    };
+  }
+
+  async function fetchLatestByReleaseApi() {
+    const payload = await fetchJson(GITHUB_RELEASE_LATEST_API);
+    const latestTag = String(payload?.tag_name || "").trim();
+    if (!latestTag) {
+      throw new Error("release api: tag_name 为空");
+    }
+    const latestVersion = normalizeVersion(latestTag);
+    if (!latestVersion) {
+      throw new Error(`release api: tag 格式不支持（${latestTag}）`);
+    }
+    return {
+      source: "release",
+      latestTag,
+      latestVersion,
+      latestUrl: String(payload?.html_url || "").trim() || `${REPO_RELEASE_PAGE_URL}/tag/${encodeURIComponent(latestTag)}`,
+      latestPublishedAt: String(payload?.published_at || "").trim(),
+      latestName: String(payload?.name || "").trim()
+    };
+  }
+
+  async function fetchLatestByReleasePage() {
+    const latestPageHtml = await fetchTextWithFallback(REPO_RELEASE_LATEST_PAGE_URL);
+    let parsed = extractLatestReleaseFromHtml(latestPageHtml);
+    if (!parsed) {
+      const releasesHtml = await fetchTextWithFallback(REPO_RELEASE_PAGE_URL);
+      parsed = extractLatestReleaseFromHtml(releasesHtml);
+    }
+    if (!parsed) {
+      throw new Error("release page: 未解析到最新 Release");
+    }
+    return {
+      source: "release-page",
+      latestTag: parsed.latestTag,
+      latestVersion: parsed.latestVersion,
+      latestUrl: `${REPO_RELEASE_PAGE_URL}/tag/${encodeURIComponent(parsed.latestTag)}`,
+      latestPublishedAt: parsed.latestPublishedAt,
+      latestName: parsed.latestName
+    };
+  }
+
+  async function fetchLatestByTagsPage() {
+    const html = await fetchTextWithFallback(GITHUB_TAGS_PAGE_URL);
+    const latestTag = extractTagFromTagsHtml(html);
+    if (!latestTag) {
+      throw new Error("tags page: 未解析到版本 tag");
+    }
+    const latestVersion = normalizeVersion(latestTag);
+    if (!latestVersion) {
+      throw new Error(`tags page: tag 格式不支持（${latestTag}）`);
+    }
+    return {
+      source: "tag-page",
+      latestTag,
+      latestVersion,
+      latestUrl: `${REPO_RELEASE_PAGE_URL}/tag/${encodeURIComponent(latestTag)}`,
+      latestPublishedAt: "",
+      latestName: ""
+    };
+  }
+
+  async function fetchLatestByRawManifest() {
+    const payload = await fetchJson(REPO_MANIFEST_RAW_URL);
+    const rawVersion = String(payload?.version || "").trim();
+    const latestVersion = normalizeVersion(rawVersion);
+    if (!latestVersion) {
+      throw new Error(`raw manifest: version 格式不支持（${rawVersion || "empty"}）`);
+    }
+    const latestTag = `v${latestVersion}`;
+    return {
+      source: "manifest",
+      latestTag,
+      latestVersion,
+      latestUrl: `${REPO_RELEASE_PAGE_URL}/tag/${encodeURIComponent(latestTag)}`,
+      latestPublishedAt: "",
+      latestName: "main 分支 manifest"
+    };
+  }
+
+  async function fetchLatestByTagsApi() {
+    const payload = await fetchJson(GITHUB_TAGS_API);
+    const first = Array.isArray(payload) ? payload[0] : null;
+    const latestTag = String(first?.name || "").trim();
+    if (!latestTag) {
+      throw new Error("tags api: 无可用 tag");
+    }
+    const latestVersion = normalizeVersion(latestTag);
+    if (!latestVersion) {
+      throw new Error(`tags api: tag 格式不支持（${latestTag}）`);
+    }
+    return {
+      source: "tag-api",
+      latestTag,
+      latestVersion,
+      latestUrl: `${REPO_RELEASE_PAGE_URL}/tag/${encodeURIComponent(latestTag)}`,
+      latestPublishedAt: "",
+      latestName: ""
+    };
+  }
+
+  async function resolveLatestVersionPayload() {
+    const errors = [];
+    const resolvers = [
+      fetchLatestByReleaseApi,
+      fetchLatestByReleasePage,
+      fetchLatestByTagsPage,
+      fetchLatestByRawManifest,
+      fetchLatestByTagsApi
+    ];
+    for (const resolver of resolvers) {
+      try {
+        const resolved = await resolver();
+        if (resolved?.latestVersion) {
+          return resolved;
+        }
+      } catch (error) {
+        errors.push(String(error?.message || error || ""));
+      }
+    }
+    throw new Error(composeUpdateFetchError(errors));
   }
 
   function evaluateUpdateResult(localVersionRaw, latestVersion) {
@@ -1153,6 +1325,7 @@
       localVersion: normalizeVersion(localVersionRaw),
       latestVersion: snapshot.latestVersion,
       latestTag: snapshot.latestTag,
+      latestSource: snapshot.latestSource,
       latestUrl: snapshot.latestUrl || (snapshot.latestTag ? `${REPO_RELEASE_PAGE_URL}/tag/${encodeURIComponent(snapshot.latestTag)}` : REPO_RELEASE_PAGE_URL),
       latestPublishedAt: snapshot.latestPublishedAt,
       latestName: snapshot.latestName,
@@ -1226,18 +1399,13 @@
 
       const checkedAt = new Date().toISOString();
       try {
-        const payload = await fetchJson(GITHUB_RELEASE_LATEST_API);
-        const latestTag = String(payload?.tag_name || "").trim();
-        if (!latestTag) {
-          throw new Error("仓库暂无正式 Release");
-        }
-        const latestVersion = normalizeVersion(latestTag);
-        if (!latestVersion) {
-          throw new Error(`Release tag 格式不支持：${latestTag}`);
-        }
-        const latestUrl = String(payload?.html_url || "").trim() || `${REPO_RELEASE_PAGE_URL}/tag/${encodeURIComponent(latestTag)}`;
-        const latestPublishedAt = String(payload?.published_at || "").trim();
-        const latestName = String(payload?.name || "").trim();
+        const latestPayload = await resolveLatestVersionPayload();
+        const latestTag = latestPayload.latestTag;
+        const latestVersion = latestPayload.latestVersion;
+        const latestUrl = latestPayload.latestUrl;
+        const latestPublishedAt = latestPayload.latestPublishedAt;
+        const latestName = latestPayload.latestName;
+        const latestSource = latestPayload.source;
         const status = evaluateUpdateResult(localVersionRaw, latestVersion);
 
         state.personalData.updateCheck = normalizeUpdateCheckState({
@@ -1247,6 +1415,7 @@
           lastError: "",
           latestVersion,
           latestTag,
+          latestSource,
           latestUrl,
           latestPublishedAt,
           latestName,
@@ -1258,6 +1427,7 @@
           localVersion: normalizeVersion(localVersionRaw),
           latestVersion,
           latestTag,
+          latestSource,
           latestUrl,
           latestPublishedAt,
           latestName,
@@ -1281,6 +1451,7 @@
           localVersion: normalizeVersion(localVersionRaw),
           latestVersion: snapshot.latestVersion,
           latestTag: snapshot.latestTag,
+          latestSource: snapshot.latestSource,
           latestUrl: snapshot.latestUrl || REPO_RELEASE_PAGE_URL,
           latestPublishedAt: snapshot.latestPublishedAt,
           latestName: snapshot.latestName,
@@ -1344,6 +1515,7 @@
       if (willOpen) {
         state.ui.tab = "library";
         state.ui.libraryView = "list";
+        void maybeAutoCheckLatestRelease();
       }
       clearStatus();
       render();
@@ -3024,31 +3196,46 @@
     return "尚未检查";
   }
 
+  function updateSourceLabel(source) {
+    const value = String(source || "").trim();
+    if (value === "release") {
+      return "GitHub Release";
+    }
+    if (value === "release-page") {
+      return "GitHub Release 页面";
+    }
+    if (value === "tag-page") {
+      return "GitHub Tags 页面";
+    }
+    if (value === "manifest") {
+      return "仓库 manifest";
+    }
+    if (value === "tag-api") {
+      return "GitHub Tags API";
+    }
+    return "未命中";
+  }
+
   function renderUpdateCheckPanel(extensionVersion) {
     const update = getUpdateCheckState();
     const latestLabel = update.latestVersion || update.latestTag || "暂无 Release";
-    const publishedLabel = update.latestPublishedAt ? formatDateTimeLabel(update.latestPublishedAt) : "未知";
+    const publishedLabel = update.latestPublishedAt
+      ? formatDateTimeLabel(update.latestPublishedAt)
+      : ((update.latestSource === "release" || update.latestSource === "release-page") ? "未知" : "非 Release 来源");
     return `
-      <section class="gm-helper-panel">
-        <div class="gm-helper-section-head">
-          <div>
-            <div class="gm-helper-section-title">版本更新</div>
-            <div class="gm-helper-section-desc">每日自动检测一次，也可手动立即检查。</div>
-          </div>
-        </div>
-        <div class="gm-helper-info-list">
-          ${renderInfoRow("当前版本", extensionVersion)}
-          ${renderInfoRow("最新版本", latestLabel)}
-          ${renderInfoRow("发布时间", publishedLabel)}
-          ${renderInfoRow("最近检查", formatDateTimeLabel(update.lastCheckedAt))}
-          ${renderInfoRow("检查状态", updateResultLabel(update.result))}
-        </div>
-        ${update.lastError ? `<div class="gm-helper-empty">最近一次检查失败：${escapeHtml(update.lastError)}</div>` : ""}
-        <div class="gm-helper-button-row">
-          <button type="button" class="gm-helper-button gm-helper-button-accent" data-action="update-check-now">立即检查更新</button>
-          <button type="button" class="gm-helper-button gm-helper-button-secondary" data-action="open-release-page" data-url="${escapeHtml(update.latestUrlResolved)}">打开 Release 页面</button>
-        </div>
-      </section>
+      <div class="gm-helper-info-list">
+        ${renderInfoRow("当前版本", extensionVersion)}
+        ${renderInfoRow("最新版本", latestLabel)}
+        ${renderInfoRow("发布时间", publishedLabel)}
+        ${renderInfoRow("最近检查", formatDateTimeLabel(update.lastCheckedAt))}
+        ${renderInfoRow("检查状态", updateResultLabel(update.result))}
+        ${renderInfoRow("版本来源", updateSourceLabel(update.latestSource))}
+      </div>
+      ${update.lastError ? `<div class="gm-helper-empty">最近一次检查失败：${escapeHtml(update.lastError)}</div>` : ""}
+      <div class="gm-helper-button-row">
+        <button type="button" class="gm-helper-button gm-helper-button-accent" data-action="update-check-now">立即检查更新</button>
+        <button type="button" class="gm-helper-button gm-helper-button-secondary" data-action="open-release-page" data-url="${escapeHtml(update.latestUrlResolved)}">打开 Release 页面</button>
+      </div>
     `;
   }
 
@@ -3181,7 +3368,13 @@
     const quickTemplateIds = new Set(normalizeCustomQuickTemplateIds(state.personalData.customQuickTemplateIds, customTemplates));
     const draft = normalizeCustomTemplateDraft(state.ui.customTemplateDraft);
     return `
-      ${renderUpdateCheckPanel(extensionVersion)}
+      ${renderCollapsibleSection({
+        id: "settings-version-update",
+        title: "版本更新",
+        desc: "每日自动检测一次，也可手动立即检查。",
+        defaultCollapsed: true,
+        body: renderUpdateCheckPanel(extensionVersion)
+      })}
 
       ${renderCollapsibleSection({
         id: "settings-external-catalogs",
