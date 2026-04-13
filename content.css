@@ -410,6 +410,47 @@
   padding: 12px;
 }
 
+.gm-helper-source-state {
+  margin-top: 8px;
+  padding: 10px 12px;
+  border: 1px solid rgba(16, 24, 40, 0.08);
+  border-radius: 12px;
+  background: rgba(248, 250, 252, 0.92);
+}
+
+.gm-helper-source-state-success {
+  border-color: rgba(2, 122, 72, 0.16);
+  background: rgba(246, 254, 249, 0.98);
+}
+
+.gm-helper-source-state-warning {
+  border-color: rgba(234, 179, 8, 0.18);
+  background: rgba(255, 251, 235, 0.98);
+}
+
+.gm-helper-source-state-error {
+  border-color: rgba(217, 45, 32, 0.16);
+  background: rgba(254, 243, 242, 0.98);
+}
+
+.gm-helper-source-state-idle {
+  border-color: rgba(16, 24, 40, 0.08);
+  background: rgba(248, 250, 252, 0.92);
+}
+
+.gm-helper-source-state-title {
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--gm-text);
+}
+
+.gm-helper-source-state-desc {
+  margin-top: 4px;
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--gm-text-soft);
+}
+
 .gm-helper-external-info-list {
   margin-top: 8px;
 }

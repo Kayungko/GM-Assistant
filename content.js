@@ -9,6 +9,44 @@
   const FAB_ICON_PATH = "floatingBall.png";
   const CATALOG_REGISTRY_PATH = "data/catalogs/registry.json";
   const CATALOG_REGISTRY_SCHEMA = "gm-helper-registry-v1";
+  const FALLBACK_CATALOG_REGISTRY = {
+    schema: CATALOG_REGISTRY_SCHEMA,
+    groups: [
+      {
+        id: "items",
+        enabled: true,
+        packs: [
+          { id: "items-in-game", group: "items", path: "data/catalogs/items/in-game.json", schema: "gm-helper-catalog-pack-v1" },
+          { id: "items-out-game", group: "items", path: "data/catalogs/items/out-game.json", schema: "gm-helper-catalog-pack-v1" },
+          { id: "items-mail-attachment", group: "items", path: "data/catalogs/items/mail-attachment.json", schema: "gm-helper-catalog-pack-v1" }
+        ]
+      },
+      {
+        id: "mail",
+        enabled: true,
+        packs: [
+          { id: "mail-base", group: "mail", path: "data/catalogs/mail/base.json", schema: "gm-helper-catalog-pack-v1" }
+        ]
+      },
+      {
+        id: "tasks",
+        enabled: true,
+        packs: [
+          { id: "tasks-base", group: "tasks", path: "data/catalogs/tasks/base.json", schema: "gm-helper-catalog-pack-v1" }
+        ]
+      },
+      {
+        id: "common",
+        enabled: true,
+        packs: [
+          { id: "common-enums", group: "common", path: "data/catalogs/common/enums.json", schema: "gm-helper-catalog-pack-v1" },
+          { id: "common-aliases", group: "common", path: "data/catalogs/common/aliases.json", schema: "gm-helper-catalog-pack-v1" },
+          { id: "common-item-taxonomy", group: "common", path: "data/catalogs/common/item-taxonomy.json", schema: "gm-helper-catalog-pack-v1" },
+          { id: "common-item-quality-map", group: "common", path: "data/catalogs/common/item-quality-map.json", schema: "gm-helper-catalog-pack-v1" }
+        ]
+      }
+    ]
+  };
   const TEXT_ENUMS_PATH = "data/catalogs/common/text-enums.json";
   const FALLBACK_TEXT_ENUMS = [
     { command: "compress_all_blob", key: "compress_all_blob_pipe", values: ["lz4", "zlib", "zstd"] },
@@ -544,19 +582,28 @@
   }
 
   async function loadBuiltInCatalogs() {
-    const registryUrl = getRuntimeUrlSafe(CATALOG_REGISTRY_PATH);
-    const registry = await fetchJson(registryUrl);
     const grouped = { items: [], mail: [], tasks: [], common: [] };
     const warnings = [];
+    let registry = null;
+
+    try {
+      const registryUrl = getRuntimeUrlSafe(CATALOG_REGISTRY_PATH);
+      registry = await fetchJson(registryUrl);
+    } catch (error) {
+      handleRuntimeInvalidated(error);
+      registry = FALLBACK_CATALOG_REGISTRY;
+      warnings.push(`registry 加载失败，已使用内置兜底：${error.message || error}`);
+      console.warn("[GM Helper] registry load failed, fallback to built-in registry:", error);
+    }
 
     if (registry?.schema && registry.schema !== CATALOG_REGISTRY_SCHEMA) {
       warnings.push(`registry schema 不匹配：${registry.schema}`);
-      return { groups: grouped, warnings };
+      registry = FALLBACK_CATALOG_REGISTRY;
     }
 
     if (!registry?.groups || !Array.isArray(registry.groups)) {
-      warnings.push("registry.json 缺少 groups");
-      return { groups: grouped, warnings };
+      warnings.push("registry.json 缺少 groups，已使用内置兜底");
+      registry = FALLBACK_CATALOG_REGISTRY;
     }
 
     for (const group of registry.groups) {
@@ -2501,13 +2548,64 @@
     return "已绑定";
   }
 
+  function getExternalBindingEffectiveState(binding) {
+    if (!binding) {
+      return {
+        kind: "idle",
+        title: "当前生效：内置词典",
+        detail: "尚未绑定外部文件，搜索与推荐继续使用扩展内置数据。"
+      };
+    }
+    const entryCount = Math.max(0, Number(binding.entryCount) || 0);
+    if (binding.lastStatus === "error") {
+      if (binding.lastImportedAt) {
+        return {
+          kind: "warning",
+          title: `当前生效：上次成功快照${entryCount ? `（${entryCount} 条）` : ""}`,
+          detail: "本次外部刷新失败，但已保留上一版成功解析结果，当前功能仍可继续使用。"
+        };
+      }
+      return {
+        kind: "error",
+        title: "当前生效：内置词典",
+        detail: "外部文件尚未成功解析，当前已回退为扩展内置词典。"
+      };
+    }
+    return {
+      kind: "success",
+      title: `当前生效：外部快照${entryCount ? `（${entryCount} 条）` : ""}`,
+      detail: "外部表格已成功接入，当前搜索、推荐和参数候选优先使用这份快照。"
+    };
+  }
+
+  function getExternalBindingActiveHint(binding) {
+    if (!binding) {
+      return "当前未接入外部数据，继续使用内置词典。";
+    }
+    const entryCount = Math.max(0, Number(binding.entryCount) || 0);
+    if (binding.lastStatus === "error") {
+      return binding.lastImportedAt
+        ? `当前继续使用上次成功快照${entryCount ? `（${entryCount} 条）` : ""}。`
+        : "当前未启用外部快照，继续使用内置词典。";
+    }
+    return `当前已生效，使用外部快照${entryCount ? `（${entryCount} 条）` : ""}。`;
+  }
+
   function renderExternalCatalogSlot(slot, title) {
     const binding = state.personalData.externalCatalogBindings?.[slot] || null;
     const status = externalBindingStatusLabel(binding);
+    const effective = getExternalBindingEffectiveState(binding);
     const entryCount = Math.max(0, Number(binding?.entryCount) || 0);
     const fileName = String(binding?.fileName || "未绑定").trim() || "未绑定";
     const sourceHint = String(binding?.sourceHint || "").trim();
     const statusClass = binding?.lastStatus === "error" ? "gm-helper-badge-danger" : binding ? "gm-helper-badge-caution" : "gm-helper-badge-normal";
+    const effectiveClass = effective.kind === "success"
+      ? "gm-helper-source-state-success"
+      : effective.kind === "warning"
+        ? "gm-helper-source-state-warning"
+        : effective.kind === "error"
+          ? "gm-helper-source-state-error"
+          : "gm-helper-source-state-idle";
     return `
       <div class="gm-helper-external-slot">
         <div class="gm-helper-template-head">
@@ -2515,6 +2613,11 @@
           <span class="gm-helper-badge ${statusClass}">${escapeHtml(status)}</span>
         </div>
         <div class="gm-helper-inline-tip">${escapeHtml(fileName)}</div>
+        <div class="gm-helper-source-state ${effectiveClass}">
+          <div class="gm-helper-source-state-title">${escapeHtml(effective.title)}</div>
+          <div class="gm-helper-source-state-desc">${escapeHtml(effective.detail)}</div>
+        </div>
+        <div class="gm-helper-inline-tip">${escapeHtml(getExternalBindingActiveHint(binding))}</div>
         <div class="gm-helper-info-list gm-helper-external-info-list">
           ${renderInfoRow("最近成功刷新", formatDateTimeLabel(binding?.lastImportedAt))}
           ${renderInfoRow("解析条数", entryCount ? `${entryCount} 条` : "0 条")}
@@ -2544,7 +2647,7 @@
       ${renderCollapsibleSection({
         id: "settings-external-catalogs",
         title: "外部数据源",
-        desc: "可直接绑定项目内的 Item.xlsx、Email.xlsx、Task.xlsx。表更新后手动点击刷新；刷新失败时继续沿用上次成功快照。",
+        desc: "可直接绑定项目内的 Item.xlsx、Email.xlsx、Task.xlsx。表更新后手动点击刷新；刷新失败时继续沿用上次成功快照。控制台里的 HTTP 404 更可能是内置词典告警，请以这里每个槽位的“当前生效”状态为准。",
         defaultCollapsed: false,
         body: `<div class="gm-helper-template-list gm-helper-external-slot-list">${renderExternalCatalogSlot("item", "Item.xlsx")}${renderExternalCatalogSlot("email", "Email.xlsx")}${renderExternalCatalogSlot("tasks", "Task.xlsx")}</div>`
       })}
@@ -3198,17 +3301,25 @@
     };
   }
 
+  function getSemanticComparableQualityId(item) {
+    const qualityId = String(item?.qualityId || item?.quality || "").trim();
+    if (qualityId && qualityId !== "unknown") {
+      return qualityId;
+    }
+    return inferType30QualityId(item?.id || item?.itemId, item?.typeId || item?.itemType);
+  }
+
   function matchesItemSemanticIntent(item, intent, opts) {
     if (!intent?.active) {
       return true;
     }
-    if (intent.forceTypeId && String(item?.typeId || "") !== String(intent.forceTypeId)) {
+    if (intent.forceTypeId && String(item?.typeId || item?.itemType || "") !== String(intent.forceTypeId)) {
       return false;
     }
     if (opts?.ignoreQuality) {
       return true;
     }
-    if (intent.forceQualityId && String(item?.qualityId || "") !== String(intent.forceQualityId)) {
+    if (intent.forceQualityId && getSemanticComparableQualityId(item) !== String(intent.forceQualityId)) {
       return false;
     }
     return true;
@@ -3221,7 +3332,7 @@
     if (matchesItemSemanticIntent(item, intent)) {
       return 980;
     }
-    const qualityId = String(item?.qualityId || "");
+    const qualityId = getSemanticComparableQualityId(item);
     if (!qualityId || qualityId === "unknown") {
       return 860;
     }
