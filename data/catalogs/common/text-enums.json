@@ -1,0 +1,25 @@
+{
+  "schema": "gm-helper-text-enums-v1",
+  "entries": [
+    {
+      "command": "compress_all_blob",
+      "key": "compress_all_blob_pipe",
+      "values": ["lz4", "zlib", "zstd"]
+    },
+    {
+      "command": "set_force_start",
+      "key": "bool_01",
+      "values": ["0", "1"]
+    },
+    {
+      "command": "role_compress",
+      "key": "role_compress_pipe",
+      "values": ["lz4", "zlib", "zstd"]
+    },
+    {
+      "command": "weaponskin_change",
+      "key": "weaponskin_change_pipe",
+      "values": ["0", "1", "2"]
+    }
+  ]
+}

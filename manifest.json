@@ -1,0 +1,72 @@
+{
+  "manifest_version": 3,
+  "name": "内网 GM 助手",
+  "version": "0.4.0",
+  "description": "在 GM 后台页面提供悬浮球和侧边栏，支持高频命令模板、智能参数选择与批量生成。",
+  "icons": {
+    "16": "logo.png",
+    "32": "logo.png",
+    "48": "logo.png",
+    "128": "logo.png"
+  },
+  "action": {
+    "default_title": "内网 GM 助手",
+    "default_icon": {
+      "16": "logo.png",
+      "32": "logo.png",
+      "48": "logo.png",
+      "128": "logo.png"
+    }
+  },
+  "web_accessible_resources": [
+    {
+      "resources": [
+        "floatingBall.png",
+        "data/catalogs/registry.json",
+        "data/catalogs/items/in-game.json",
+        "data/catalogs/items/out-game.json",
+        "data/catalogs/items/mail-attachment.json",
+        "data/catalogs/items/base.json",
+        "data/catalogs/mail/base.json",
+        "data/catalogs/mail/item-email.json",
+        "data/catalogs/tasks/base.json",
+        "data/catalogs/common/enums.json",
+        "data/catalogs/common/aliases.json",
+        "data/catalogs/common/text-enums.json",
+        "data/catalogs/common/item-taxonomy.json",
+        "data/catalogs/common/item-quality-map.json"
+      ],
+      "matches": [
+        "<all_urls>"
+      ]
+    }
+  ],
+  "permissions": [
+    "storage"
+  ],
+  "host_permissions": [
+    "<all_urls>"
+  ],
+  "content_scripts": [
+    {
+      "matches": [
+        "<all_urls>"
+      ],
+      "js": [
+        "xlsx.full.min.js",
+        "modules/commands/player.js",
+        "modules/commands/items.js",
+        "modules/commands/mail.js",
+        "modules/commands/tasks.js",
+        "modules/importers/json.js",
+        "modules/importers/xlsx.js",
+        "modules/importers/text-enum.js",
+        "content.js"
+      ],
+      "css": [
+        "content.css"
+      ],
+      "run_at": "document_idle"
+    }
+  ]
+}

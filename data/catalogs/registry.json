@@ -1,0 +1,105 @@
+{
+  "schema": "gm-helper-registry-v1",
+  "groups": [
+    {
+      "id": "items",
+      "title": "物品",
+      "enabled": true,
+      "packs": [
+        {
+          "id": "items-in-game",
+          "group": "items",
+          "version": "1.0.0",
+          "path": "data/catalogs/items/in-game.json",
+          "schema": "gm-helper-catalog-pack-v1",
+          "dependsOn": []
+        },
+        {
+          "id": "items-out-game",
+          "group": "items",
+          "version": "1.0.0",
+          "path": "data/catalogs/items/out-game.json",
+          "schema": "gm-helper-catalog-pack-v1",
+          "dependsOn": []
+        },
+        {
+          "id": "items-mail-attachment",
+          "group": "items",
+          "version": "1.0.0",
+          "path": "data/catalogs/items/mail-attachment.json",
+          "schema": "gm-helper-catalog-pack-v1",
+          "dependsOn": []
+        }
+      ]
+    },
+    {
+      "id": "mail",
+      "title": "邮件",
+      "enabled": true,
+      "packs": [
+        {
+          "id": "mail-base",
+          "group": "mail",
+          "version": "1.0.0",
+          "path": "data/catalogs/mail/base.json",
+          "schema": "gm-helper-catalog-pack-v1",
+          "dependsOn": []
+        }
+      ]
+    },
+    {
+      "id": "tasks",
+      "title": "任务",
+      "enabled": true,
+      "packs": [
+        {
+          "id": "tasks-base",
+          "group": "tasks",
+          "version": "1.0.0",
+          "path": "data/catalogs/tasks/base.json",
+          "schema": "gm-helper-catalog-pack-v1",
+          "dependsOn": []
+        }
+      ]
+    },
+    {
+      "id": "common",
+      "title": "通用",
+      "enabled": true,
+      "packs": [
+        {
+          "id": "common-enums",
+          "group": "common",
+          "version": "1.0.0",
+          "path": "data/catalogs/common/enums.json",
+          "schema": "gm-helper-catalog-pack-v1",
+          "dependsOn": []
+        },
+        {
+          "id": "common-aliases",
+          "group": "common",
+          "version": "1.0.0",
+          "path": "data/catalogs/common/aliases.json",
+          "schema": "gm-helper-catalog-pack-v1",
+          "dependsOn": []
+        },
+        {
+          "id": "common-item-taxonomy",
+          "group": "common",
+          "version": "1.0.0",
+          "path": "data/catalogs/common/item-taxonomy.json",
+          "schema": "gm-helper-catalog-pack-v1",
+          "dependsOn": []
+        },
+        {
+          "id": "common-item-quality-map",
+          "group": "common",
+          "version": "1.0.0",
+          "path": "data/catalogs/common/item-quality-map.json",
+          "schema": "gm-helper-catalog-pack-v1",
+          "dependsOn": []
+        }
+      ]
+    }
+  ]
+}
