@@ -90,6 +90,18 @@
       icon: '<svg class="gm-helper-rail-icon-svg" viewBox="0 0 1024 1024" aria-hidden="true" focusable="false"><path d="M940 596l-76-57.6c0.8-8 1.6-16.8 1.6-26.4s-0.8-18.4-1.6-26.4l76-57.6c20.8-16 26.4-44 12.8-68L868 216.8c-9.6-16.8-28-27.2-47.2-27.2-6.4 0-12 0.8-18.4 3.2L712 228c-15.2-10.4-31.2-19.2-47.2-26.4l-13.6-92c-4-26.4-26.4-45.6-53.6-45.6H426.4c-27.2 0-49.6 19.2-53.6 44.8L360 201.6c-16 7.2-31.2 16-47.2 26.4l-90.4-35.2c-6.4-2.4-12.8-3.2-19.2-3.2-19.2 0-37.6 9.6-46.4 26.4L71.2 360c-13.6 22.4-8 52 12.8 68l76 57.6c-0.8 9.6-1.6 18.4-1.6 26.4s0 16.8 1.6 26.4L84 596c-20.8 16-26.4 44-12.8 68L156 807.2c9.6 16.8 28 27.2 47.2 27.2 6.4 0 12-0.8 18.4-3.2L312 796c15.2 10.4 31.2 19.2 47.2 26.4l13.6 92C376 940 399.2 960 426.4 960h171.2c27.2 0 49.6-19.2 53.6-44.8l13.6-92.8c16-7.2 31.2-16 47.2-26.4l90.4 35.2c6.4 2.4 12.8 3.2 19.2 3.2 19.2 0 37.6-9.6 46.4-26.4l85.6-144.8C966.4 640 960.8 612 940 596z m-236-84c0 105.6-86.4 192-192 192s-192-86.4-192-192 86.4-192 192-192 192 86.4 192 192z"></path></svg>'
     }
   ];
+  const UI_THEME_OPTIONS = [
+    { id: "default", label: "默认", description: "当前蓝色工具风格，信息密度更高。" },
+    { id: "linear", label: "Linear", description: "深色中性底 + 靛蓝高亮，克制且清晰。" },
+    { id: "sentry", label: "Sentry", description: "监控面板风格：深紫灰底 + 品红告警强调。" },
+    { id: "notion", label: "Notion", description: "纸面感浅色风格：温和留白 + 低饱和中性色。" }
+  ];
+  const UI_THEME_IDS = new Set(UI_THEME_OPTIONS.map((item) => item.id));
+  const UI_THEME_CLASS_PREFIX = "gm-helper-theme-";
+  const UI_THEME_CLASS_NAMES = UI_THEME_OPTIONS
+    .map((item) => item.id)
+    .filter((id) => id !== "default")
+    .map((id) => `${UI_THEME_CLASS_PREFIX}${id}`);
   const DEVELOPER_INFO = {
     team: "@ 柯家荣",
     maintainer: "GM 助手插件项目",
@@ -163,7 +175,8 @@
         lastResult: "idle"
       },
       customTemplates: [],
-      customQuickTemplateIds: []
+      customQuickTemplateIds: [],
+      skinTheme: "default"
     },
     commandConfigCache: { version: COMMAND_CONFIG_VERSION, commandIds: COMMANDS.map((x) => x.id) },
     ui: {
@@ -546,6 +559,38 @@
       .slice(0, 8);
   }
 
+  function normalizeThemeId(themeId) {
+    const value = String(themeId || "").trim();
+    return UI_THEME_IDS.has(value) ? value : "default";
+  }
+
+  function getThemeMeta(themeId) {
+    const normalizedId = normalizeThemeId(themeId);
+    return UI_THEME_OPTIONS.find((item) => item.id === normalizedId) || UI_THEME_OPTIONS[0];
+  }
+
+  function setTheme(themeId) {
+    const previousId = normalizeThemeId(state.personalData.skinTheme);
+    const nextTheme = getThemeMeta(themeId);
+    state.personalData.skinTheme = nextTheme.id;
+    return {
+      changed: previousId !== nextTheme.id,
+      theme: nextTheme
+    };
+  }
+
+  function applySidebarTheme(sidebar) {
+    if (!sidebar) {
+      return;
+    }
+    UI_THEME_CLASS_NAMES.forEach((className) => sidebar.classList.remove(className));
+    const theme = getThemeMeta(state.personalData.skinTheme);
+    sidebar.dataset.theme = theme.id;
+    if (theme.id !== "default") {
+      sidebar.classList.add(`${UI_THEME_CLASS_PREFIX}${theme.id}`);
+    }
+  }
+
   function setItemActionMenu(itemId, itemName) {
     state.ui.itemActionMenu = {
       itemId: String(itemId || "").trim(),
@@ -577,6 +622,7 @@
       state.personalData.customQuickTemplateIds,
       state.personalData.customTemplates
     );
+    state.personalData.skinTheme = normalizeThemeId(state.personalData.skinTheme);
     state.commandConfigCache = { version: COMMAND_CONFIG_VERSION, commandIds: COMMANDS.map((x) => x.id) };
     COMMANDS.forEach((command) => ensureWorkspace(command.id));
     const legacyView = String(state.ui.view || "");
@@ -1604,6 +1650,7 @@
 
     applyFabPosition(fab);
     applySidebarWidth(sidebar);
+    applySidebarTheme(sidebar);
     bindFabDragging(fab);
     bindSidebarResizing(sidebar);
 
@@ -1910,6 +1957,8 @@
       ensureWorkspace,
       clearStatus,
       setStatus,
+      setTheme,
+      getThemeMeta,
       render,
       persistState,
       focusImportEntry,
@@ -2571,6 +2620,7 @@
     if (!sidebar) {
       return;
     }
+    applySidebarTheme(sidebar);
     const bodyScrollState = captureBodyScrollState();
     const searchQuery = state.ui.searchQuery.trim();
     const isLibraryTab = state.ui.tab === "library";
@@ -3049,10 +3099,31 @@
     `;
   }
 
+  function renderThemeSettingsPanel() {
+    const currentTheme = getThemeMeta(state.personalData.skinTheme);
+    const optionsHtml = UI_THEME_OPTIONS.map((theme) => `
+      <button
+        type="button"
+        class="gm-helper-mode-btn ${currentTheme.id === theme.id ? "gm-helper-mode-btn-active" : ""}"
+        data-action="set-theme"
+        data-theme="${escapeHtml(theme.id)}"
+      >${escapeHtml(theme.label)}</button>
+    `).join("");
+    return renderCollapsibleSection({
+      id: "settings-theme",
+      title: "界面皮肤",
+      desc: "支持切换面板视觉风格。当前提供 Default / Linear / Sentry / Notion 四套皮肤。",
+      defaultCollapsed: false,
+      body: `<div class="gm-helper-mode-row">${optionsHtml}</div><div class="gm-helper-inline-tip">当前皮肤：${escapeHtml(currentTheme.label)}。${escapeHtml(currentTheme.description)}</div>`
+    });
+  }
+
   function renderSettingsTab() {
-    return runtimeViews?.renderSettingsTab
+    const themePanel = renderThemeSettingsPanel();
+    const settingsHtml = runtimeViews?.renderSettingsTab
       ? runtimeViews.renderSettingsTab()
       : "";
+    return `${themePanel}${settingsHtml}`;
   }
 
   function getExtensionVersionSafe() {

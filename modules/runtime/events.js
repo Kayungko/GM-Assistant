@@ -21,6 +21,13 @@
         ctx.render();
         await ctx.persistState();
       },
+      "set-theme": async (ctx, payload) => {
+        const result = ctx.setTheme(payload.node.dataset.theme);
+        ctx.clearStatus();
+        ctx.setStatus(`已切换皮肤：${result.theme.label}`, "success");
+        ctx.render();
+        await ctx.persistState();
+      },
       "goto-settings-import": async (ctx) => {
         ctx.state.ui.tab = "settings";
         ctx.state.ui.collapsedSections = {
@@ -692,4 +699,3 @@
     return { clickActionMap, inputFieldMap, changeFieldMap };
   };
 })();
-
