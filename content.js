@@ -101,7 +101,8 @@
     names: new Set(["背包杂物批量发放（示例）"])
   };
 
-    const MODULES = window.__gmHelperModules || {};
+  const MODULES = window.__gmHelperModules || {};
+  const RUNTIME_MODULES = window.__gmHelperRuntime || {};
 
   const COMMANDS = buildCommandsFromModules();
 
@@ -194,6 +195,9 @@
   let fabDragState = null;
   let sidebarResizeState = null;
   let updateCheckPromise = null;
+  let runtimeServices = null;
+  let runtimeViews = null;
+  let runtimeEventMaps = null;
   const dismissedUpdateVersionsInSession = new Set();
   let catalogStore = createEmptyCatalogStore();
   let catalogLoadWarnings = [];
@@ -273,11 +277,75 @@
   async function init() {
     await restoreState();
     normalizeState();
-    await rebuildCatalogStore();
+    initRuntimeLayers();
+    await runtimeServices.catalogService.rebuild();
     injectUI();
     bindFocusTracking();
     bindWindowResize();
     render();
+  }
+
+  function initRuntimeLayers() {
+    runtimeServices = RUNTIME_MODULES.createRuntimeServices
+      ? RUNTIME_MODULES.createRuntimeServices({
+        rebuildCatalogStore,
+        mergeCatalogSources,
+        writeToTarget,
+        findWritableTarget,
+        checkLatestRelease,
+        maybeAutoCheckLatestRelease,
+        getReleasePageUrlFromUpdateState
+      })
+      : {
+        catalogService: {
+          rebuild: async () => rebuildCatalogStore(),
+          merge: (builtin, externalSnapshots, imported) => mergeCatalogSources(builtin, externalSnapshots, imported)
+        },
+        targetWriter: {
+          fill: (text) => writeToTarget(text, false),
+          append: (text) => writeToTarget(text, true),
+          resolveTarget: () => findWritableTarget()
+        },
+        versionService: {
+          checkLatestRelease: async (options) => checkLatestRelease(options),
+          maybeAutoCheckLatestRelease: async () => maybeAutoCheckLatestRelease(),
+          getReleasePageUrl: () => getReleasePageUrlFromUpdateState()
+        }
+      };
+
+    runtimeViews = RUNTIME_MODULES.createRuntimeViews
+      ? RUNTIME_MODULES.createRuntimeViews(buildRuntimeViewContext())
+      : null;
+    runtimeEventMaps = RUNTIME_MODULES.createEventMaps
+      ? RUNTIME_MODULES.createEventMaps()
+      : { clickActionMap: {}, inputFieldMap: {}, changeFieldMap: {} };
+  }
+
+  function buildRuntimeViewContext() {
+    return {
+      state,
+      commands: COMMANDS,
+      commandMap: COMMAND_MAP,
+      groups: GROUPS,
+      developerInfo: DEVELOPER_INFO,
+      futureAccessNote: FUTURE_ACCESS_NOTE,
+      escapeHtml,
+      badgeClass,
+      riskLabel,
+      lineCount,
+      shouldShowParam,
+      renderField,
+      renderCard,
+      renderCollapsibleSection,
+      getCustomTemplates,
+      normalizeCustomQuickTemplateIds,
+      normalizeCustomTemplateDraft,
+      nonEmptyLines,
+      getSelectedSuggestionItemIds,
+      getUpdateCheckState,
+      getCatalogLoadWarnings: () => catalogLoadWarnings,
+      getExtensionVersionSafe
+    };
   }
 
   async function restoreState() {
@@ -1814,484 +1882,79 @@
     });
   }
 
+  function buildRuntimeEventContext() {
+    return {
+      state,
+      services: runtimeServices,
+      commandMap: COMMAND_MAP,
+      confirm: (message) => window.confirm(message),
+      clearItemActionMenu,
+      clearSuggestionSelection,
+      normalizeSuggestionSelection,
+      getSelectedSuggestionItemIds,
+      setItemActionMenu,
+      resetWorkspaceForSuggestion,
+      applyItemSuggestionToCommand,
+      openWorkspace,
+      saveCustomTemplateDraft,
+      toggleCustomQuickTemplate,
+      deleteCustomTemplate,
+      applyCustomTemplate,
+      clearExternalCatalogSlot,
+      openUpToDateModal,
+      openReleasePage,
+      dismissUpdateModal,
+      toggleFavorite,
+      toggleSection,
+      pushUid,
+      ensureWorkspace,
+      clearStatus,
+      setStatus,
+      render,
+      persistState,
+      focusImportEntry,
+      focusCustomTemplateEntry,
+      inferUid,
+      touchCommand,
+      copyOutput,
+      writeOutput,
+      savePreset,
+      loadPreset,
+      deletePreset,
+      sendToBackendInput,
+      togglePickerOption,
+      clearPickerSelections,
+      selectAllPickerOptions,
+      invertPickerOptions,
+      getMultiValues,
+      getMailTemplateRows,
+      setMailTemplateRows,
+      resolveMailItemName,
+      getParam,
+      getItemPickerFilterState,
+      importCatalogData,
+      bindExternalCatalogFile,
+      focusSearchInput,
+      focusPickerInput,
+      buildPickerComposeKey,
+      getPickerComposingKey: () => pickerComposingKey,
+      isSearchComposing: () => isSearchComposing
+    };
+  }
+
   async function onClick(event) {
     const node = event.target.closest("[data-action]");
     if (!node) {
       return;
     }
-
-    const action = node.dataset.action;
+    const action = String(node.dataset.action || "");
     const commandId = node.dataset.commandId || state.ui.selectedCommandId;
     const command = COMMAND_MAP.get(commandId);
-
-    if (action === "close") {
-      document.getElementById("gm-helper-sidebar").classList.remove("gm-helper-open");
+    const handler = runtimeEventMaps?.clickActionMap?.[action];
+    if (!handler) {
       return;
     }
-    if (action === "switch-tab") {
-      const tab = String(node.dataset.tab || "");
-      if (["library", "settings"].includes(tab)) {
-        state.ui.tab = tab;
-        if (tab === "library") {
-          state.ui.libraryView = "list";
-        } else {
-          void maybeAutoCheckLatestRelease();
-        }
-      }
-      clearItemActionMenu();
-      clearStatus();
-      render();
-      await persistState();
-      return;
-    }
-    if (action === "goto-settings-import") {
-      state.ui.tab = "settings";
-      state.ui.collapsedSections = {
-        ...(state.ui.collapsedSections || {}),
-        "settings-advanced-import": false
-      };
-      clearItemActionMenu();
-      clearStatus();
-      render();
-      focusImportEntry();
-      await persistState();
-      return;
-    }
-    if (action === "goto-settings-custom") {
-      state.ui.tab = "settings";
-      state.ui.collapsedSections = {
-        ...(state.ui.collapsedSections || {}),
-        "settings-custom-templates": false
-      };
-      clearItemActionMenu();
-      clearStatus();
-      render();
-      focusCustomTemplateEntry();
-      await persistState();
-      return;
-    }
-    if (action === "go-library-list") {
-      state.ui.tab = "library";
-      state.ui.libraryView = "list";
-      clearItemActionMenu();
-      clearStatus();
-      render();
-      await persistState();
-      return;
-    }
-    if (action === "open-item-action-menu") {
-      const itemId = String(node.dataset.itemId || "").trim();
-      const itemName = String(node.dataset.itemName || "").trim();
-      const currentId = String(state.ui.itemActionMenu?.itemId || "");
-      if (!itemId) {
-        return;
-      }
-      if (currentId === itemId) {
-        clearItemActionMenu();
-      } else {
-        setItemActionMenu(itemId, itemName);
-      }
-      clearStatus();
-      render();
-      return;
-    }
-    if (action === "choose-item-action") {
-      const targetCommandId = String(node.dataset.commandId || "");
-      const itemId = String(node.dataset.itemId || "").trim();
-      if (!COMMAND_MAP.has(targetCommandId) || !itemId) {
-        return;
-      }
-      clearItemActionMenu();
-      resetWorkspaceForSuggestion(targetCommandId);
-      openWorkspace(targetCommandId);
-      applyItemSuggestionToCommand(targetCommandId, itemId);
-      setStatus(`已打开命令并预填道具 ${itemId}`, "success");
-      render();
-      await persistState();
-      return;
-    }
-    if (action === "toggle-suggestion-item") {
-      const itemId = String(node.dataset.itemId || "").trim();
-      if (!itemId) {
-        return;
-      }
-      const current = new Set(normalizeSuggestionSelection(state.ui.suggestionSelection));
-      if (current.has(itemId)) {
-        current.delete(itemId);
-      } else {
-        current.add(itemId);
-      }
-      state.ui.suggestionSelection = Array.from(current);
-      clearStatus();
-      render();
-      await persistState();
-      return;
-    }
-    if (action === "suggestion-select-all") {
-      state.ui.suggestionSelection = normalizeSuggestionSelection((state.ui.searchSuggestions?.items || []).map((item) => item.itemId));
-      clearStatus();
-      render();
-      await persistState();
-      return;
-    }
-    if (action === "suggestion-invert") {
-      const availableIds = normalizeSuggestionSelection((state.ui.searchSuggestions?.items || []).map((item) => item.itemId));
-      const selected = new Set(normalizeSuggestionSelection(state.ui.suggestionSelection));
-      state.ui.suggestionSelection = availableIds.filter((itemId) => !selected.has(itemId));
-      clearStatus();
-      render();
-      await persistState();
-      return;
-    }
-    if (action === "suggestion-clear") {
-      clearSuggestionSelection();
-      clearStatus();
-      render();
-      await persistState();
-      return;
-    }
-    if (action === "apply-suggestion-items-action") {
-      const targetCommandId = String(node.dataset.commandId || "").trim();
-      const selectedItemIds = getSelectedSuggestionItemIds(state.ui.searchSuggestions);
-      if (!COMMAND_MAP.has(targetCommandId)) {
-        return;
-      }
-      if (!selectedItemIds.length) {
-        setStatus("请先勾选要处理的道具。", "error");
-        render();
-        await persistState();
-        return;
-      }
-      clearItemActionMenu();
-      resetWorkspaceForSuggestion(targetCommandId);
-      openWorkspace(targetCommandId);
-      applyItemSuggestionToCommand(targetCommandId, selectedItemIds);
-      setStatus(`已打开命令并预填 ${selectedItemIds.length} 个道具`, "success");
-      render();
-      await persistState();
-      return;
-    }
-    if (action === "open-suggested-command") {
-      const targetCommandId = String(node.dataset.commandId || "");
-      if (!COMMAND_MAP.has(targetCommandId)) {
-        return;
-      }
-      clearItemActionMenu();
-      resetWorkspaceForSuggestion(targetCommandId);
-      openWorkspace(targetCommandId);
-      const selectedItemIds = getSelectedSuggestionItemIds(state.ui.searchSuggestions);
-      if (selectedItemIds.length) {
-        applyItemSuggestionToCommand(targetCommandId, selectedItemIds);
-      }
-      clearStatus();
-      render();
-      await persistState();
-      return;
-    }
-    if (action === "open-command") {
-      openWorkspace(commandId);
-      await persistState();
-      return;
-    }
-    if (action === "save-custom-template") {
-      saveCustomTemplateDraft();
-      render();
-      await persistState();
-      return;
-    }
-    if (action === "toggle-custom-quick") {
-      const templateId = String(node.dataset.templateId || "").trim();
-      if (!templateId) {
-        return;
-      }
-      toggleCustomQuickTemplate(templateId);
-      setStatus("已更新顶部快捷入口配置", "success");
-      render();
-      await persistState();
-      return;
-    }
-    if (action === "delete-custom-template") {
-      const templateId = String(node.dataset.templateId || "").trim();
-      if (!templateId) {
-        return;
-      }
-      deleteCustomTemplate(templateId);
-      render();
-      await persistState();
-      return;
-    }
-    if (action === "apply-custom-template" || action === "append-custom-template") {
-      const templateId = String(node.dataset.templateId || "").trim();
-      const appendMode = action === "append-custom-template";
-      await applyCustomTemplate(templateId, appendMode);
-      await persistState();
-      return;
-    }
-    if (action === "bind-external-slot" || action === "refresh-external-slot") {
-      const slot = String(node.dataset.slot || "").trim();
-      const input = document.getElementById(`gm-helper-external-input-${slot}`);
-      if (input) {
-        input.value = "";
-        input.click();
-      }
-      return;
-    }
-    if (action === "clear-external-slot") {
-      const slot = String(node.dataset.slot || "").trim();
-      await clearExternalCatalogSlot(slot);
-      render();
-      await persistState();
-      return;
-    }
-    if (action === "open-import") {
-      const input = document.getElementById("gm-helper-import-input");
-      if (input) {
-        input.value = "";
-        input.click();
-      }
-      return;
-    }
-    if (action === "update-check-now") {
-      const result = await checkLatestRelease({ force: true, trigger: "manual", allowModal: true });
-      if (result.status === "updateAvailable") {
-        setStatus(`发现新版本 ${result.latestVersion || result.latestTag}，可前往 Release 页面更新`, "success");
-      } else if (result.status === "upToDate") {
-        openUpToDateModal(result);
-        setStatus("已是最新版本", "success");
-      } else if (result.status === "incomparable") {
-        setStatus("版本格式无法比较，请确认 manifest.version 与 tag 格式", "error");
-      } else {
-        setStatus(`检查更新失败：${result.error || "未知错误"}`, "error");
-      }
-      render();
-      await persistState();
-      return;
-    }
-    if (action === "open-release-page") {
-      const targetUrl = String(node.dataset.url || "").trim();
-      openReleasePage(targetUrl || getReleasePageUrlFromUpdateState());
-      return;
-    }
-    if (action === "dismiss-update-modal") {
-      dismissUpdateModal();
-      render();
-      await persistState();
-      return;
-    }
-    if (action === "toggle-favorite") {
-      toggleFavorite(commandId);
-      render();
-      await persistState();
-      return;
-    }
-    if (action === "toggle-section") {
-      toggleSection(node.dataset.sectionId);
-      render();
-      await persistState();
-      return;
-    }
-    if (action === "use-uid") {
-      state.userContext.currentUid = node.dataset.uid || "";
-      pushUid(state.userContext.currentUid);
-      render();
-      await persistState();
-      return;
-    }
-    if (action === "use-last-command") {
-      openWorkspace(state.userContext.lastCommandId);
-      await persistState();
-      return;
-    }
-    if (action === "set-batch-mode" && command) {
-      const ws = ensureWorkspace(commandId);
-      ws.batchMode = node.dataset.mode || ws.batchMode;
-      clearStatus();
-      render();
-      await persistState();
-      return;
-    }
-    if (action === "generate" && command) {
-      const result = command.build(command, ensureWorkspace(commandId));
-      if (!result.ok) {
-        setStatus(result.message, "error");
-      } else {
-        if (result.count > 200 && !window.confirm(`本次将生成 ${result.count} 条命令，确认继续吗？`)) {
-          setStatus("已取消生成", "error");
-          render();
-          return;
-        }
-        const ws = ensureWorkspace(commandId);
-        ws.output = result.output;
-        touchCommand(commandId);
-        const uid = inferUid(command, ws);
-        if (uid) {
-          pushUid(uid);
-        }
-        setStatus(`已生成 ${result.count} 条命令`, "success");
-      }
-      render();
-      await persistState();
-      return;
-    }
-    if (action === "copy" && command) {
-      await copyOutput(command);
-      await persistState();
-      return;
-    }
-    if ((action === "fill" || action === "append") && command) {
-      await writeOutput(command, action === "append");
-      await persistState();
-      return;
-    }
-    if (action === "clear-output" && command) {
-      ensureWorkspace(commandId).output = "";
-      clearStatus();
-      render();
-      await persistState();
-      return;
-    }
-    if (action === "save-preset" && command) {
-      savePreset(command);
-      render();
-      await persistState();
-      return;
-    }
-    if (action === "load-preset" && command) {
-      loadPreset(command);
-      render();
-      await persistState();
-      return;
-    }
-    if (action === "delete-preset" && command) {
-      deletePreset(command);
-      render();
-      await persistState();
-      return;
-    }
-    if (action === "fill-backend-search") {
-      await sendToBackendInput(state.ui.searchQuery.trim());
-      await persistState();
-      return;
-    }
-    if (action === "picker-toggle-option" && command) {
-      togglePickerOption(command, node.dataset.key, node.dataset.value);
-      const ws = ensureWorkspace(command.id);
-      ws.pickerCursor[node.dataset.key] = Math.max(0, Number(node.dataset.optionIndex || 0));
-      render();
-      await persistState();
-      return;
-    }
-    if (action === "picker-clear" && command) {
-      clearPickerSelections(command, node.dataset.key);
-      render();
-      await persistState();
-      return;
-    }
-    if (action === "picker-select-all" && command) {
-      selectAllPickerOptions(command, node.dataset.key);
-      render();
-      await persistState();
-      return;
-    }
-    if (action === "picker-invert" && command) {
-      invertPickerOptions(command, node.dataset.key);
-      render();
-      await persistState();
-      return;
-    }
-    if (action === "mail-template-add-selected" && command) {
-      const key = String(node.dataset.key || "").trim();
-      if (!key) {
-        return;
-      }
-      const ws = ensureWorkspace(command.id);
-      const selectedIds = getMultiValues(ws, key);
-      if (!selectedIds.length) {
-        setStatus("请先勾选要加入的道具", "error");
-        render();
-        await persistState();
-        return;
-      }
-      const rows = getMailTemplateRows(ws, key);
-      const existing = new Set(rows.map((row) => `${row.itemId}:${row.bind}`));
-      let addedCount = 0;
-      selectedIds.forEach((itemId) => {
-        const keyId = `${itemId}:0`;
-        if (existing.has(keyId)) {
-          return;
-        }
-        rows.push({ itemId, count: "1", bind: "0", name: resolveMailItemName(itemId) });
-        existing.add(keyId);
-        addedCount += 1;
-      });
-      setMailTemplateRows(ws, key, rows);
-      ws.multiValues[key] = [];
-      ws.output = "";
-      setStatus(addedCount ? `已加入 ${addedCount} 个道具到附件列表` : "所选道具已在附件列表中", "success");
-      render();
-      await persistState();
-      return;
-    }
-    if (action === "mail-template-remove-item" && command) {
-      const key = String(node.dataset.key || "").trim();
-      const itemId = String(node.dataset.itemId || "").trim();
-      const bind = String(node.dataset.bind || "0").trim() === "1" ? "1" : "0";
-      if (!key || !itemId) {
-        return;
-      }
-      const ws = ensureWorkspace(command.id);
-      const rows = getMailTemplateRows(ws, key).filter((row) => !(row.itemId === itemId && row.bind === bind));
-      setMailTemplateRows(ws, key, rows);
-      ws.output = "";
-      clearStatus();
-      render();
-      await persistState();
-      return;
-    }
-    if (action === "mail-template-clear-items" && command) {
-      const key = String(node.dataset.key || "").trim();
-      if (!key) {
-        return;
-      }
-      const ws = ensureWorkspace(command.id);
-      setMailTemplateRows(ws, key, []);
-      ws.multiValues[key] = [];
-      ws.output = "";
-      clearStatus();
-      render();
-      await persistState();
-      return;
-    }
-    if (action === "item-picker-set-scope" && command) {
-      const ws = ensureWorkspace(command.id);
-      const param = getParam(command, node.dataset.key);
-      if (param) {
-        const filter = getItemPickerFilterState(ws, param);
-        filter.scope = String(node.dataset.scope || filter.scope || "in-game");
-        filter.typeId = "";
-        filter.subTypeId = "";
-        filter.crossScope = false;
-      }
-      clearStatus();
-      render();
-      await persistState();
-      return;
-    }
-    if (action === "item-picker-open-extended" && command) {
-      const ws = ensureWorkspace(command.id);
-      const param = getParam(command, node.dataset.key);
-      if (param) {
-        const filter = getItemPickerFilterState(ws, param);
-        filter.scope = "out-game";
-        filter.typeId = "__extended__";
-        filter.subTypeId = "";
-        filter.crossScope = false;
-      }
-      clearStatus();
-      render();
-      await persistState();
-      return;
-    }
+    await handler(buildRuntimeEventContext(), { event, node, action, commandId, command });
   }
 
   async function onInput(event) {
@@ -2300,68 +1963,11 @@
     if (!field) {
       return;
     }
-    if (field === "searchQuery") {
-      state.ui.searchQuery = target.value;
-      clearSuggestionSelection();
-      clearItemActionMenu();
-      clearStatus();
-      if (isSearchComposing || target.dataset.composing === "1") {
-        return;
-      }
-      render();
-      focusSearchInput(target.value);
-      await persistState();
+    const handler = runtimeEventMaps?.inputFieldMap?.[field];
+    if (!handler) {
       return;
     }
-    if (field === "currentUid") {
-      state.userContext.currentUid = target.value;
-      clearStatus();
-      await persistState();
-      return;
-    }
-    if (field === "customTemplateName") {
-      state.ui.customTemplateDraft.name = target.value;
-      clearStatus();
-      await persistState();
-      return;
-    }
-    if (field === "customTemplateContent") {
-      state.ui.customTemplateDraft.content = target.value;
-      clearStatus();
-      await persistState();
-      return;
-    }
-    if (field === "pickerQuery") {
-      const ws = ensureWorkspace(target.dataset.commandId);
-      ws.pickerQueries[target.dataset.key] = target.value;
-      ws.pickerCursor[target.dataset.key] = 0;
-      clearStatus();
-      const key = buildPickerComposeKey(target.dataset.commandId, target.dataset.key);
-      if (event.isComposing || target.dataset.composing === "1" || pickerComposingKey === key) {
-        await persistState();
-        return;
-      }
-      render();
-      focusPickerInput(target.dataset.commandId, target.dataset.key, target.value);
-      await persistState();
-      return;
-    }
-    if (field === "workspace-param") {
-      ensureWorkspace(target.dataset.commandId).values[target.dataset.key] = target.value;
-      clearStatus();
-      await persistState();
-      return;
-    }
-    if (field === "workspace-output") {
-      ensureWorkspace(target.dataset.commandId).output = target.value;
-      clearStatus();
-      await persistState();
-      return;
-    }
-    if (field === "presetDraftName") {
-      ensureWorkspace(target.dataset.commandId).presetDraftName = target.value;
-      await persistState();
-    }
+    await handler(buildRuntimeEventContext(), { event, target, field });
   }
 
   async function onChange(event) {
@@ -2370,134 +1976,11 @@
     if (!field) {
       return;
     }
-    if (field === "currentUid") {
-      pushUid(target.value);
-      render();
-      await persistState();
+    const handler = runtimeEventMaps?.changeFieldMap?.[field];
+    if (!handler) {
       return;
     }
-    if (field === "selectedPresetId") {
-      ensureWorkspace(target.dataset.commandId).selectedPresetId = target.value;
-      await persistState();
-      return;
-    }
-    if (field === "customTemplateReplaceUid") {
-      state.ui.customTemplateDraft.replaceUid = Boolean(target.checked);
-      clearStatus();
-      await persistState();
-      return;
-    }
-    if (field === "workspace-param" && String(target.tagName || "").toUpperCase() === "SELECT") {
-      ensureWorkspace(target.dataset.commandId).values[target.dataset.key] = target.value;
-      clearStatus();
-      await persistState();
-      return;
-    }
-    if (field === "itemPickerScope") {
-      const ws = ensureWorkspace(target.dataset.commandId);
-      const command = COMMAND_MAP.get(target.dataset.commandId);
-      const param = command ? getParam(command, target.dataset.key) : null;
-      if (param) {
-        const filter = getItemPickerFilterState(ws, param);
-        filter.scope = String(target.value || "");
-        filter.typeId = "";
-        filter.subTypeId = "";
-        filter.crossScope = false;
-      }
-      clearStatus();
-      render();
-      await persistState();
-      return;
-    }
-    if (field === "itemPickerType") {
-      const ws = ensureWorkspace(target.dataset.commandId);
-      const command = COMMAND_MAP.get(target.dataset.commandId);
-      const param = command ? getParam(command, target.dataset.key) : null;
-      if (param) {
-        const filter = getItemPickerFilterState(ws, param);
-        filter.typeId = String(target.value || "");
-        filter.subTypeId = "";
-      }
-      clearStatus();
-      render();
-      await persistState();
-      return;
-    }
-    if (field === "itemPickerSubType") {
-      const ws = ensureWorkspace(target.dataset.commandId);
-      const command = COMMAND_MAP.get(target.dataset.commandId);
-      const param = command ? getParam(command, target.dataset.key) : null;
-      if (param) {
-        const filter = getItemPickerFilterState(ws, param);
-        filter.subTypeId = String(target.value || "");
-      }
-      clearStatus();
-      render();
-      await persistState();
-      return;
-    }
-    if (field === "itemPickerCrossScope") {
-      const ws = ensureWorkspace(target.dataset.commandId);
-      const command = COMMAND_MAP.get(target.dataset.commandId);
-      const param = command ? getParam(command, target.dataset.key) : null;
-      if (param) {
-        const filter = getItemPickerFilterState(ws, param);
-        filter.crossScope = Boolean(target.checked);
-      }
-      clearStatus();
-      render();
-      await persistState();
-      return;
-    }
-    if (field === "mailTemplateItemCount") {
-      const ws = ensureWorkspace(target.dataset.commandId);
-      const key = String(target.dataset.key || "").trim();
-      const itemId = String(target.dataset.itemId || "").trim();
-      const bind = String(target.dataset.bind || "0").trim() === "1" ? "1" : "0";
-      if (key && itemId) {
-        const rows = getMailTemplateRows(ws, key).map((row) => {
-          if (row.itemId !== itemId || row.bind !== bind) {
-            return row;
-          }
-          const nextCount = Number(target.value);
-          return { ...row, count: String(Number.isFinite(nextCount) && nextCount > 0 ? Math.floor(nextCount) : 1) };
-        });
-        setMailTemplateRows(ws, key, rows);
-        ws.output = "";
-      }
-      clearStatus();
-      await persistState();
-      return;
-    }
-    if (field === "mailTemplateItemBind") {
-      const ws = ensureWorkspace(target.dataset.commandId);
-      const key = String(target.dataset.key || "").trim();
-      const itemId = String(target.dataset.itemId || "").trim();
-      const oldBind = String(target.dataset.bind || "0").trim() === "1" ? "1" : "0";
-      if (key && itemId) {
-        const rows = getMailTemplateRows(ws, key).map((row) => {
-          if (row.itemId !== itemId || row.bind !== oldBind) {
-            return row;
-          }
-          return { ...row, bind: String(target.value || "0") === "1" ? "1" : "0" };
-        });
-        setMailTemplateRows(ws, key, rows);
-        ws.output = "";
-      }
-      clearStatus();
-      render();
-      await persistState();
-      return;
-    }
-    if (field === "importFile") {
-      await importCatalogData(target.files?.[0]);
-      target.value = "";
-      return;
-    }
-    if (field === "externalCatalogFile") {
-      await bindExternalCatalogFile(target.dataset.slot, target.files?.[0], target.value || "");
-      target.value = "";
-    }
+    await handler(buildRuntimeEventContext(), { event, target, field });
   }
 
   async function onKeydown(event) {
@@ -2634,7 +2117,7 @@
       }
 
       state.personalData.importedCatalogs = normalizeImportedCatalogs(payload.groups);
-      await rebuildCatalogStore();
+      await runtimeServices.catalogService.rebuild();
       setStatus(`导入成功：${payload.sourceMeta.fileName}（${payload.stats.entryCount} 条）`, "success");
       render();
       await persistState();
@@ -2743,7 +2226,7 @@
         entryCount,
         prevBinding
       );
-      await rebuildCatalogStore();
+      await runtimeServices.catalogService.rebuild();
       setStatus(`外部词典已刷新：${externalCatalogSlotLabel(normalizedSlot)}（${entryCount} 条）`, "success");
       render();
       await persistState();
@@ -2755,7 +2238,7 @@
         prevBinding,
         error
       );
-      await rebuildCatalogStore();
+      await runtimeServices.catalogService.rebuild();
       setStatus(`外部词典刷新失败：${error.message}`, "error");
       render();
       await persistState();
@@ -2769,7 +2252,7 @@
     }
     state.personalData.externalCatalogBindings[normalizedSlot] = null;
     state.personalData.externalCatalogSnapshots[normalizedSlot] = createEmptyCatalogGroups();
-    await rebuildCatalogStore();
+    await runtimeServices.catalogService.rebuild();
     setStatus(`已解除 ${externalCatalogSlotLabel(normalizedSlot)} 绑定`, "success");
   }
 
@@ -2815,7 +2298,9 @@
       render();
       return;
     }
-    const ok = writeToTarget(output, appendMode);
+    const ok = appendMode
+      ? runtimeServices.targetWriter.append(output)
+      : runtimeServices.targetWriter.fill(output);
     if (ok) {
       touchCommand(command.id);
       setStatus(appendMode ? "已追加到后台输入框" : "已填入后台输入框", "success");
@@ -2831,7 +2316,7 @@
       render();
       return;
     }
-    const ok = writeToTarget(query, false);
+    const ok = runtimeServices.targetWriter.fill(query);
     setStatus(ok ? `已把“${query}”填入后台输入框，可直接使用后台联想` : "未找到后台输入框，请先点击后台搜索/命令输入框", ok ? "success" : "error");
     render();
   }
@@ -2986,7 +2471,9 @@
       render();
       return;
     }
-    const okWrite = writeToTarget(result.output, appendMode);
+    const okWrite = appendMode
+      ? runtimeServices.targetWriter.append(result.output)
+      : runtimeServices.targetWriter.fill(result.output);
     if (okWrite) {
       setStatus(appendMode ? `已追加模板：${template.name}` : `已填入模板：${template.name}`, "success");
     } else {
@@ -3282,27 +2769,9 @@
   }
 
   function renderLibraryTop(command) {
-    const recentUidChips = state.userContext.recentUids.slice(0, 6);
-    return `
-      <section class="gm-helper-panel gm-helper-top-panel">
-        <div class="gm-helper-top-grid">
-          <div class="gm-helper-field gm-helper-field-grow">
-            <label class="gm-helper-label" for="gm-helper-search">搜你要做什么</label>
-            <input id="gm-helper-search" class="gm-helper-input" data-field="searchQuery" placeholder="例如：刷物品、邮箱、加钻石、查玩家" value="${escapeHtml(state.ui.searchQuery)}" />
-          </div>
-          <div class="gm-helper-field">
-            <label class="gm-helper-label" for="gm-helper-current-uid">当前 UID</label>
-            <input id="gm-helper-current-uid" class="gm-helper-input" data-field="currentUid" placeholder="例如 11980" value="${escapeHtml(state.userContext.currentUid)}" />
-          </div>
-        </div>
-        <div class="gm-helper-chip-row">
-          ${state.userContext.lastCommandId ? `<button type="button" class="gm-helper-chip gm-helper-chip-ghost" data-action="use-last-command">继续上次：${escapeHtml(COMMAND_MAP.get(state.userContext.lastCommandId).title)}</button>` : ""}
-          <button type="button" class="gm-helper-chip gm-helper-chip-ghost" data-action="switch-tab" data-tab="settings">设置</button>
-          <span class="gm-helper-top-hint">${command && command.params.some((p) => p.key === "uid") ? "当前命令可直接复用顶部 UID" : "建议先设置 UID，再进入命令工作台。"}</span>
-        </div>
-        ${recentUidChips.length ? `<div class="gm-helper-subtitle">最近 UID</div><div class="gm-helper-chip-row">${recentUidChips.map((uid) => `<button type="button" class="gm-helper-chip" data-action="use-uid" data-uid="${escapeHtml(uid)}">${escapeHtml(uid)}</button>`).join("")}</div>` : ""}
-      </section>
-    `;
+    return runtimeViews?.renderLibraryTop
+      ? runtimeViews.renderLibraryTop(command)
+      : "";
   }
 
   function renderLibraryList(results, suggestions) {
@@ -3348,42 +2817,9 @@
   }
 
   function renderSearchSuggestionPanel(suggestions) {
-    const itemSuggestions = Array.isArray(suggestions?.items) ? suggestions.items : [];
-    const commandSuggestions = Array.isArray(suggestions?.commands) ? suggestions.commands : [];
-    const hasItemHits = itemSuggestions.length > 0;
-    const selectedItemIds = getSelectedSuggestionItemIds(suggestions);
-    const selectedSet = new Set(selectedItemIds);
-    return `
-      <section class="gm-helper-panel gm-helper-suggestion-panel">
-        <div class="gm-helper-section-head">
-          <div>
-            <div class="gm-helper-section-title">搜索推荐</div>
-            <div class="gm-helper-section-desc">先勾选道具，再统一选择操作；不会默认替你预填某一个物品。</div>
-          </div>
-        </div>
-        <div class="gm-helper-suggest-grid">
-          <div class="gm-helper-suggest-block">
-            <div class="gm-helper-subtitle">推荐操作</div>
-            ${commandSuggestions.length
-              ? `<div class="gm-helper-chip-row gm-helper-suggest-op-row">${commandSuggestions.map((row) => `<button type="button" class="gm-helper-chip" data-action="open-suggested-command" data-command-id="${escapeHtml(row.commandId)}">${escapeHtml(row.title)}</button>`).join("")}</div>${commandSuggestions[0].reason ? `<div class="gm-helper-inline-tip">${escapeHtml(commandSuggestions[0].reason)}</div>` : ""}`
-              : '<div class="gm-helper-empty">未命中推荐操作，请继续输入更精确关键词。</div>'}
-          </div>
-          <div class="gm-helper-suggest-block">
-            <div class="gm-helper-picker-head">
-              <div class="gm-helper-subtitle">推荐道具</div>
-              ${hasItemHits ? `<div class="gm-helper-picker-head-actions"><button type="button" class="gm-helper-button gm-helper-button-ghost" data-action="suggestion-select-all">全选当前结果</button><button type="button" class="gm-helper-button gm-helper-button-ghost" data-action="suggestion-invert">反选</button><button type="button" class="gm-helper-button gm-helper-button-ghost" data-action="suggestion-clear">清空</button></div>` : ""}
-            </div>
-            ${hasItemHits
-              ? `<div class="gm-helper-inline-tip">当前已选 ${selectedItemIds.length} 项。勾选后可统一带入下方高频物品操作。</div><div class="gm-helper-chip-row gm-helper-suggest-op-row"><button type="button" class="gm-helper-chip" data-action="apply-suggestion-items-action" data-command-id="add_item" ${selectedItemIds.length ? "" : "disabled"}>背包加道具</button><button type="button" class="gm-helper-chip" data-action="apply-suggestion-items-action" data-command-id="summon_item" ${selectedItemIds.length ? "" : "disabled"}>局内刷物品</button></div><div class="gm-helper-suggest-item-list">${itemSuggestions.map((item) => {
-              const itemId = String(item.itemId || "");
-              const checked = selectedSet.has(itemId);
-              return `<button type="button" class="gm-helper-suggest-item gm-helper-suggest-item-select ${checked ? "gm-helper-suggest-item-expanded" : ""}" data-action="toggle-suggestion-item" data-item-id="${escapeHtml(itemId)}"><div class="gm-helper-suggest-item-main"><div class="gm-helper-suggest-item-title">${escapeHtml(itemId)} ${escapeHtml(item.name)}</div><div class="gm-helper-suggest-item-meta">${escapeHtml(item.path)}</div></div><span class="gm-helper-picker-check ${checked ? "gm-helper-picker-check-on" : ""}">${checked ? "✓" : ""}</span></button>`;
-            }).join("")}</div>`
-              : `<div class="gm-helper-empty">当前词典未命中该道具。</div><div class="gm-helper-button-row"><button type="button" id="gm-helper-import-guide-btn" class="gm-helper-button gm-helper-button-secondary" data-action="goto-settings-import">前往设置页导入 Item.xlsx</button></div>`}
-          </div>
-        </div>
-      </section>
-    `;
+    return runtimeViews?.renderSearchSuggestionPanel
+      ? runtimeViews.renderSearchSuggestionPanel(suggestions)
+      : "";
   }
 
   function formatDateTimeLabel(value) {
@@ -3614,70 +3050,9 @@
   }
 
   function renderSettingsTab() {
-    const imported = state.personalData.importedCatalogs || {};
-    const importCount = (imported.items?.length || 0) + (imported.mail?.length || 0) + (imported.tasks?.length || 0) + (imported.common?.length || 0);
-    const catalogMeta = importCount ? `已导入 ${importCount} 条词典` : "使用内置词典";
-    const warningMeta = catalogLoadWarnings.length ? `（${catalogLoadWarnings.length} 项加载失败）` : "";
-    const extensionVersion = state.ui.runtimeInvalidated ? "unknown" : getExtensionVersionSafe();
-    const customTemplates = getCustomTemplates();
-    const quickTemplateIds = new Set(normalizeCustomQuickTemplateIds(state.personalData.customQuickTemplateIds, customTemplates));
-    const draft = normalizeCustomTemplateDraft(state.ui.customTemplateDraft);
-    return `
-      ${renderCollapsibleSection({
-        id: "settings-version-update",
-        title: "版本更新",
-        desc: "每日自动检测一次，也可手动立即检查。",
-        defaultCollapsed: true,
-        body: renderUpdateCheckPanel(extensionVersion)
-      })}
-
-      ${renderCollapsibleSection({
-        id: "settings-external-catalogs",
-        title: "外部数据源",
-        desc: "可直接绑定项目内的 Item.xlsx、Email.xlsx、Task.xlsx。表更新后手动点击刷新；刷新失败时继续沿用上次成功快照。控制台里的 HTTP 404 更可能是内置词典告警，请以这里每个槽位的“当前生效”状态为准。",
-        defaultCollapsed: false,
-        body: `<div class="gm-helper-template-list gm-helper-external-slot-list">${renderExternalCatalogSlot("item", "Item.xlsx")}${renderExternalCatalogSlot("email", "Email.xlsx")}${renderExternalCatalogSlot("tasks", "Task.xlsx")}</div>`
-      })}
-
-      ${renderCollapsibleSection({
-        id: "settings-advanced-import",
-        title: "高级导入",
-        desc: "用于调试或临时覆盖词典，不作为日常主数据源。",
-        defaultCollapsed: true,
-        body: `<div class="gm-helper-button-row gm-helper-import-row"><button type="button" id="gm-helper-import-btn" class="gm-helper-button gm-helper-button-secondary" data-action="open-import">导入词典(Item/Email .xlsx/.json)</button><input id="gm-helper-import-input" data-field="importFile" type="file" accept=".xlsx,.json,application/json,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" class="gm-helper-hidden-file-input" /><span class="gm-helper-inline-tip">当前词典：${escapeHtml(catalogMeta)}${warningMeta ? ` ${escapeHtml(warningMeta)}` : ""}</span></div>${catalogLoadWarnings.length ? `<div class="gm-helper-empty">存在 ${catalogLoadWarnings.length} 项词典加载告警，详情请查看控制台日志。</div>` : ""}`
-      })}
-
-      ${renderCollapsibleSection({
-        id: "settings-custom-templates",
-        title: "自定义命令模板",
-        desc: "粘贴多行命令并命名保存。可开启 UID 占位符替换（支持 {{uid}} / {uid} / 用户ID / 角色UID）。并可管理顶部“自定义快捷”入口。",
-        defaultCollapsed: true,
-        body: `<div class="gm-helper-form-grid"><div class="gm-helper-field gm-helper-field-grow"><label class="gm-helper-label" for="gm-helper-custom-name">模板名称</label><input id="gm-helper-custom-name" class="gm-helper-input" data-field="customTemplateName" placeholder="例如：日常补偿包" value="${escapeHtml(draft.name)}" /></div><div class="gm-helper-field gm-helper-field-grow"><label class="gm-helper-label" for="gm-helper-custom-content">命令文本</label><textarea id="gm-helper-custom-content" class="gm-helper-textarea" data-field="customTemplateContent" placeholder="支持多行命令，一行一条">${escapeHtml(draft.content)}</textarea></div></div><label class="gm-helper-item-cross gm-helper-template-switch"><input type="checkbox" data-field="customTemplateReplaceUid" ${draft.replaceUid ? "checked" : ""} /><span>使用顶部当前 UID 替换占位符</span></label><div class="gm-helper-button-row"><button type="button" class="gm-helper-button gm-helper-button-accent" data-action="save-custom-template">保存模板</button></div>${customTemplates.length ? `<div class="gm-helper-subtitle">已保存模板</div><div class="gm-helper-template-list">${customTemplates.map((template) => { const previewLine = nonEmptyLines(template.content || "")[0] || ""; const preview = previewLine.length > 72 ? `${previewLine.slice(0, 72)}...` : previewLine; const pinned = quickTemplateIds.has(template.id); return `<div class="gm-helper-template-item"><div class="gm-helper-template-head"><div class="gm-helper-template-title">${escapeHtml(template.name)}</div><span class="gm-helper-badge ${template.replaceUid ? "gm-helper-badge-caution" : "gm-helper-badge-normal"}">${template.replaceUid ? "UID替换" : "原样"}</span></div><div class="gm-helper-inline-tip">${escapeHtml(preview || "（空模板）")}</div><div class="gm-helper-button-row"><button type="button" class="gm-helper-button gm-helper-button-secondary" data-action="apply-custom-template" data-template-id="${escapeHtml(template.id)}">填入后台</button><button type="button" class="gm-helper-button gm-helper-button-secondary" data-action="append-custom-template" data-template-id="${escapeHtml(template.id)}">追加</button><button type="button" class="gm-helper-button gm-helper-button-ghost" data-action="toggle-custom-quick" data-template-id="${escapeHtml(template.id)}">${pinned ? "移出顶部快捷" : "加入顶部快捷"}</button><button type="button" class="gm-helper-button gm-helper-button-danger" data-action="delete-custom-template" data-template-id="${escapeHtml(template.id)}">删除</button></div></div>`; }).join("")}</div>` : `<div class="gm-helper-empty">暂无自定义模板。可先粘贴一组命令并保存，后续点击一次即可直接填入后台输入框。</div>`}`
-      })}
-
-      <section class="gm-helper-panel">
-        <div class="gm-helper-section-head">
-          <div>
-            <div class="gm-helper-section-title">开发者信息</div>
-            <div class="gm-helper-section-desc">如需反馈问题或提交需求，请通过内部渠道联系。</div>
-          </div>
-        </div>
-        <div class="gm-helper-info-list">
-          ${renderInfoRow("团队", DEVELOPER_INFO.team)}
-          ${renderInfoRow("维护项目", DEVELOPER_INFO.maintainer)}
-          ${renderInfoRow("联系渠道", DEVELOPER_INFO.contact)}
-        </div>
-      </section>
-
-      <section class="gm-helper-panel">
-        <div class="gm-helper-section-head">
-          <div>
-            <div class="gm-helper-section-title">后续接入说明</div>
-            <div class="gm-helper-section-desc">${escapeHtml(FUTURE_ACCESS_NOTE)}</div>
-          </div>
-        </div>
-      </section>
-    `;
+    return runtimeViews?.renderSettingsTab
+      ? runtimeViews.renderSettingsTab()
+      : "";
   }
 
   function getExtensionVersionSafe() {
@@ -3694,34 +3069,9 @@
   }
 
   function renderWorkspace(command, ws) {
-    return `
-      ${renderCollapsibleSection({
-        id: `workspace-summary-${command.id}`,
-        title: command.title,
-        desc: command.description,
-        defaultCollapsed: false,
-        panelClass: command.risk === "danger" ? "gm-helper-risk-danger" : command.risk === "caution" ? "gm-helper-risk-caution" : "",
-        rightMeta: `<span class="gm-helper-badge ${badgeClass(command.risk)}">${escapeHtml(riskLabel(command.risk))}</span>`,
-        body: `<div class="gm-helper-command-name">${escapeHtml(command.command)}</div><div class="gm-helper-inline-tip">适用场景：${escapeHtml(command.useCases)}</div><div class="gm-helper-button-row"><button type="button" class="gm-helper-button gm-helper-button-ghost" data-action="toggle-favorite" data-command-id="${command.id}">${state.personalData.favorites.includes(command.id) ? "取消收藏" : "加入收藏"}</button></div>`
-      })}
-
-      ${renderCollapsibleSection({
-        id: `workspace-form-${command.id}`,
-        title: "参数表单",
-        desc: "参数顺序已固定，可减少手动拼接命令时的遗漏与格式错误。",
-        defaultCollapsed: false,
-        body: `${command.batchModes ? `<div class="gm-helper-mode-row">${command.batchModes.map((mode) => `<button type="button" class="gm-helper-mode-btn ${ws.batchMode === mode.id ? "gm-helper-mode-btn-active" : ""}" data-action="set-batch-mode" data-command-id="${command.id}" data-mode="${mode.id}">${escapeHtml(mode.label)}</button>`).join("")}</div>` : ""}<div class="gm-helper-form-grid">${command.params.filter((p) => shouldShowParam(p, ws.batchMode)).map((p) => renderField(command, ws, p)).join("")}</div>`
-      })}
-
-      ${renderCollapsibleSection({
-        id: `workspace-output-${command.id}`,
-        title: "结果预览",
-        desc: "生成结果可复制、填入或追加至后台输入框；默认不自动发送。",
-        defaultCollapsed: false,
-        rightMeta: `<div class="gm-helper-result-meta">共 ${lineCount(ws.output)} 条命令</div>`,
-        body: `<textarea class="gm-helper-textarea gm-helper-output" data-field="workspace-output" data-command-id="${command.id}" placeholder="点击“生成命令”后显示在这里">${escapeHtml(ws.output)}</textarea><div class="gm-helper-button-row"><button type="button" class="gm-helper-button gm-helper-button-accent" data-action="generate" data-command-id="${command.id}">生成命令</button><button type="button" class="gm-helper-button gm-helper-button-secondary" data-action="copy" data-command-id="${command.id}">复制</button><button type="button" class="gm-helper-button gm-helper-button-secondary" data-action="fill" data-command-id="${command.id}">填入后台</button><button type="button" class="gm-helper-button gm-helper-button-secondary" data-action="append" data-command-id="${command.id}">追加到后台</button><button type="button" class="gm-helper-button gm-helper-button-ghost" data-action="clear-output" data-command-id="${command.id}">清空结果</button></div>`
-      })}
-    `;
+    return runtimeViews?.renderWorkspace
+      ? runtimeViews.renderWorkspace(command, ws)
+      : "";
   }
 
   function renderCollapsibleSection(options) {

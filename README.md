@@ -1,4 +1,4 @@
-# 内网 GM 助手（v1.4.5）
+# 内网 GM 助手（v1.5.0）
 
 浏览器插件形态的 GM 场景化操作加速器。  
 定位是“命令工作台 + 智能参数选择”，不替代后台原生命令联想，不自动发送命令。
@@ -13,6 +13,14 @@
 - `send_template_mail` 多附件构建器：道具可搜索多选、加入附件列表后统一生成 `itemid/num/bind;...`
 - 外部词典源：绑定 `Item.xlsx` / `Email.xlsx` / `Task.xlsx`，手动刷新
 - 自定义命令模板：保存多行命令，一键填入后台输入框
+
+## v1.5.0 版本改动（重构版）
+
+- 重构：`content.js` 从单体实现重构为“入口壳 + 事件层 + 视图层 + 服务层”。
+- 新增：`modules/runtime/events.js`（事件分发表），替代 `onClick/onInput/onChange` 大量条件分支。
+- 新增：`modules/runtime/views.js`（命令库/工作台/设置页主视图），主 `render()` 改为页面拼装。
+- 新增：`modules/runtime/services.js`（catalog / target-writer / version 服务入口）。
+- 工程形态保持不变：继续无构建，`manifest` 多脚本顺序加载；用户功能与交互规则保持一致。
 
 ## v1.4.5 版本改动
 
@@ -32,11 +40,11 @@
 
 ## 版本对齐规则
 
-- `manifest.json` 中 `version` 作为插件当前版本（当前为 `1.4.5`）
+- `manifest.json` 中 `version` 作为插件当前版本（当前为 `1.5.0`）
 - GitHub 发布规范：
   - Tag：`vX.Y.Z`
   - Manifest：`X.Y.Z`
-- 示例：发布 `v1.4.5` 时，`manifest.version` 必须是 `1.4.5`
+- 示例：发布 `v1.5.0` 时，`manifest.version` 必须是 `1.5.0`
 
 ## 数据目录
 

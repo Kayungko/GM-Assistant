@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "内网 GM 助手",
-  "version": "1.4.5",
+  "version": "1.5.0",
   "description": "在 GM 后台页面提供悬浮球和侧边栏，支持高频命令模板、智能参数选择与批量生成。",
   "icons": {
     "16": "logo.png",
@@ -61,6 +61,9 @@
         "modules/importers/json.js",
         "modules/importers/xlsx.js",
         "modules/importers/text-enum.js",
+        "modules/runtime/services.js",
+        "modules/runtime/views.js",
+        "modules/runtime/events.js",
         "content.js"
       ],
       "css": [
