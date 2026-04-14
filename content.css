@@ -1122,24 +1122,28 @@
   width: 100%;
   display: flex;
   flex-direction: column;
+  gap: var(--gm-space-sm);
 }
 
 .gm-helper-update-modal-content-centered {
-  justify-content: center;
-  margin: auto 0;
+  margin: 0;
 }
 
 .gm-helper-update-modal-desc {
-  margin-top: var(--gm-space-sm);
+  margin-top: 0;
   font-size: 13px;
   color: #475467;
   line-height: 1.5;
 }
 
 .gm-helper-update-modal-meta {
-  margin-top: var(--gm-space-md);
+  margin-top: 0;
   font-size: 12px;
   color: #667085;
+}
+
+.gm-helper-update-modal-content .gm-helper-button-row {
+  margin-top: var(--gm-space-sm);
 }
 
 .gm-helper-panel {

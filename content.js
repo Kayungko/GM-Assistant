@@ -401,9 +401,10 @@
         }
       });
     } catch (error) {
+      const shouldRenderRuntimeInvalidatedHint = !state.ui.runtimeInvalidatedHintShown;
       if (!handleRuntimeInvalidated(error)) {
         console.warn("[GM Helper] persistState failed:", error);
-      } else {
+      } else if (shouldRenderRuntimeInvalidatedHint) {
         render();
       }
     }
