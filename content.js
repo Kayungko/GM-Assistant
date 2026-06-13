@@ -1866,7 +1866,9 @@
 
   function clampFabPosition(left, top, width, height) {
     const padding = 12;
-    const maxLeft = Math.max(padding, window.innerWidth - width - padding);
+    const hasVScroll = document.documentElement.scrollHeight > window.innerHeight;
+    const scrollbarW = hasVScroll ? 17 : 0;
+    const maxLeft = Math.max(padding, window.innerWidth - width - padding - scrollbarW);
     const maxTop = Math.max(padding, window.innerHeight - height - padding);
     return {
       left: Math.min(Math.max(Number(left) || padding, padding), maxLeft),

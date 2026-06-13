@@ -16,6 +16,7 @@
             void ctx.services.versionService.maybeAutoCheckLatestRelease();
           }
         }
+        ctx.state.ui.pendingConfirm = null;
         ctx.clearItemActionMenu();
         ctx.clearStatus();
         ctx.render();
@@ -262,6 +263,9 @@
         await ctx.persistState();
       },
       "use-last-command": async (ctx) => {
+        if (!ctx.commandMap.has(ctx.state.userContext.lastCommandId)) {
+          ctx.state.userContext.lastCommandId = "summon_item";
+        }
         ctx.openWorkspace(ctx.state.userContext.lastCommandId);
         await ctx.persistState();
       },
@@ -283,10 +287,15 @@
         if (!result.ok) {
           ctx.setStatus(result.message, "error");
         } else {
-          if (result.count > 200 && !ctx.confirm(`本次将生成 ${result.count} 条命令，确认继续吗？`)) {
-            ctx.setStatus("已取消生成", "error");
-            ctx.render();
-            return;
+          if (result.count > 200) {
+            if (!ctx.confirm(`本次将生成 ${result.count} 条命令，确认继续吗？`)) {
+              ctx.setStatus("已取消生成", "error");
+              ctx.render();
+              return;
+            }
+          }
+          if (result.count > 50) {
+            ctx.setStatus(`正在生成 ${result.count} 条命令...`, "info");
           }
           const ws = ctx.ensureWorkspace(payload.commandId);
           ws.output = result.output;
