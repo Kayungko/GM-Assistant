@@ -250,12 +250,15 @@
       "toggle-section": async (ctx, payload) => {
         ctx.toggleSection(payload.node.dataset.sectionId);
         ctx.render();
+        const isNowCollapsed = ctx.state.ui.collapsedSections?.[payload.node.dataset.sectionId];
+        ctx.setStatus(isNowCollapsed ? "已折叠分组" : "已展开分组", "info");
         await ctx.persistState();
       },
       "use-uid": async (ctx, payload) => {
         ctx.state.userContext.currentUid = payload.node.dataset.uid || "";
         ctx.pushUid(ctx.state.userContext.currentUid);
         ctx.render();
+        ctx.setStatus("已切换 UID 至 " + (payload.node.dataset.uid || "（空）"), "success");
         await ctx.persistState();
       },
       "use-last-command": async (ctx) => {
@@ -305,16 +308,28 @@
         await ctx.copyOutput(payload.command);
         await ctx.persistState();
       },
-      "confirm-risk-proceed": async (ctx, payload) => {
+      "confirm-pending-proceed": async (ctx, payload) => {
         const pending = ctx.state.ui.pendingConfirm;
+        ctx.state.ui.pendingConfirm = null;
         if (!payload.command || !pending || pending.commandId !== payload.command.id) {
           return;
         }
-        await ctx.writeOutput(payload.command, pending.appendMode);
+        if (pending.action === "switch-command") {
+          ctx.doOpenWorkspace(pending.switchTargetId);
+        } else {
+          await ctx.writeOutput(payload.command, pending.appendMode);
+        }
         await ctx.persistState();
       },
-      "confirm-risk-cancel": async (ctx) => {
-        ctx.cancelPendingConfirm();
+      "confirm-pending-cancel": async (ctx, payload) => {
+        const pending = ctx.state.ui.pendingConfirm;
+        ctx.state.ui.pendingConfirm = null;
+        if (pending && pending.switchTargetId) {
+          ctx.clearStatus();
+          ctx.render();
+        } else {
+          ctx.cancelPendingConfirm();
+        }
         await ctx.persistState();
       },
       fill: async (ctx, payload) => {
@@ -547,6 +562,7 @@
       },
       selectedPresetId: async (ctx, payload) => {
         ctx.ensureWorkspace(payload.target.dataset.commandId).selectedPresetId = payload.target.value;
+        ctx.render();
         await ctx.persistState();
       },
       customTemplateReplaceUid: async (ctx, payload) => {

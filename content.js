@@ -1980,6 +1980,9 @@
       savePreset,
       loadPreset,
       deletePreset,
+      getPresets,
+      isWorkspaceDirty,
+      doOpenWorkspace,
       sendToBackendInput,
       togglePickerOption,
       clearPickerSelections,
@@ -2162,6 +2165,17 @@
     if (!COMMAND_MAP.has(commandId)) {
       return;
     }
+    const prevId = state.ui.selectedCommandId;
+    const switching = prevId && prevId !== commandId && state.ui.libraryView === "workspace";
+    if (switching && isWorkspaceDirty(prevId)) {
+      state.ui.pendingConfirm = { commandId: prevId, action: "switch-command", message: "当前参数已填写，切换命令后将丢失。确认切换？", switchTargetId: commandId };
+      render();
+      return;
+    }
+    doOpenWorkspace(commandId);
+  }
+
+  function doOpenWorkspace(commandId) {
     clearItemActionMenu();
     state.ui.tab = "library";
     state.ui.libraryView = "workspace";
@@ -2385,11 +2399,30 @@
     if (!output) {
       return;
     }
+    const count = lineCount(output);
+    let copied = false;
     try {
       await navigator.clipboard.writeText(output);
-      setStatus(`已复制 ${lineCount(output)} 条命令到剪贴板`, "success");
-    } catch (error) {
-      setStatus(`复制失败：${error.message}`, "error");
+      copied = true;
+    } catch (_) {
+      try {
+        const ta = document.createElement("textarea");
+        ta.value = output;
+        ta.style.position = "fixed";
+        ta.style.left = "-9999px";
+        ta.style.top = "-9999px";
+        document.body.appendChild(ta);
+        ta.select();
+        copied = document.execCommand("copy");
+        document.body.removeChild(ta);
+      } catch (_) {
+        // both methods failed
+      }
+    }
+    if (copied) {
+      setStatus(`已复制 ${count} 条命令到剪贴板`, "success");
+    } else {
+      setStatus("复制失败，请尝试手动选择并复制结果预览区中的文本", "error");
     }
     render();
   }
@@ -2623,6 +2656,22 @@
     syncWorkspaceMultiValues(command, ws);
     syncMailTemplateBuilderValues(command, ws);
     return ws;
+  }
+
+  function isWorkspaceDirty(commandId) {
+    const ws = ensureWorkspace(commandId);
+    if (String(ws.output || "").trim()) {
+      return true;
+    }
+    const hasMulti = Object.values(ws.multiValues || {}).some((arr) => Array.isArray(arr) && arr.length > 0);
+    if (hasMulti) {
+      return true;
+    }
+    const hasMailRows = Object.values(ws.mailTemplateItems || {}).some((arr) => Array.isArray(arr) && arr.length > 0);
+    if (hasMailRows) {
+      return true;
+    }
+    return false;
   }
 
   function createWorkspace(commandId) {
@@ -2910,7 +2959,7 @@
               <div class="gm-helper-section-desc">${hasItemSuggestion ? "命中命令模板如下。" : "优先使用插件推荐链路；未命中时再考虑后台原生联想兜底。"}</div>
             </div>
           </div>
-          ${results.length ? `<div class="gm-helper-card-grid">${results.map((x) => renderCard(x.command, x.meta)).join("")}</div>` : '<div class="gm-helper-empty">未命中高频模板，可将关键字提交至后台原生命令搜索。</div>'}
+          ${results.length ? `<div class="gm-helper-card-grid">${results.map((x) => renderCard(x.command, x.meta)).join("")}</div>` : `<div class="gm-helper-empty"><div>未匹配到命令或道具。建议：</div><ul class="gm-helper-hint-list"><li>使用更短关键词（如"物品" → "道具"）</li><li>尝试物品 ID 或英文命令名（如 10001 / summon）</li><li><button type="button" class="gm-helper-button gm-helper-button-ghost gm-helper-inline-btn" data-action="switch-tab" data-tab="settings">前往设置页导入词典</button> 以支持中文名称搜索</li></ul></div>`}
           ${hasItemSuggestion ? "" : `<div class="gm-helper-fallback"><button type="button" class="gm-helper-button gm-helper-button-accent" data-action="fill-backend-search">把“${escapeHtml(state.ui.searchQuery.trim())}”填入后台输入框</button><div class="gm-helper-inline-tip">可继续使用后台原生联想列表进行精确定位。</div></div>`}
         </section>
       `;
@@ -4240,7 +4289,7 @@
     const fields = [{ text: command.title, score: 1000, meta: "标题命中" }]
       .concat(command.aliases.map((text) => ({ text, score: 850, meta: "别名命中" })))
       .concat(command.tags.map((text) => ({ text, score: 700, meta: "标签命中" })))
-      .concat([{ text: command.command, score: 600, meta: "命令名命中" }, { text: command.description, score: 450, meta: "说明命中" }, { text: command.useCases, score: 350, meta: "场景命中" }]);
+      .concat([{ text: command.command, score: 600, meta: "命令名命中" }, { text: command.description, score: 500, meta: "说明命中" }, { text: command.useCases, score: 500, meta: "场景命中" }]);
     let best = { score: 0, meta: "" };
     fields.forEach((field) => {
       const normalizedField = normalizeSearch(field.text);

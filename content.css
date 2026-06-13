@@ -2129,3 +2129,43 @@
 #gm-helper-toast.gm-helper-toast-error {
   background: #b42318 !important;
 }
+
+.gm-helper-preset-row {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+
+.gm-helper-preset-row .gm-helper-select {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.gm-helper-preset-row .gm-helper-input {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.gm-helper-preset-row .gm-helper-button-row {
+  flex: 0 0 auto;
+  display: flex;
+  gap: 4px;
+}
+
+.gm-helper-hint-list {
+  text-align: left;
+  margin: 4px 0 0;
+  padding: 0 0 0 16px;
+  font-size: 11px;
+  line-height: 1.7;
+}
+
+.gm-helper-hint-list li {
+  margin-bottom: 2px;
+}
+
+.gm-helper-inline-btn {
+  font-size: inherit !important;
+  padding: 0 4px !important;
+  vertical-align: baseline;
+}
