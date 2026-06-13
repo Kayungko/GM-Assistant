@@ -125,26 +125,6 @@
         ctx.render();
         await ctx.persistState();
       },
-      "apply-suggestion-items-action": async (ctx, payload) => {
-        const targetCommandId = String(payload.node.dataset.commandId || "").trim();
-        const selectedItemIds = ctx.getSelectedSuggestionItemIds(ctx.state.ui.searchSuggestions);
-        if (!ctx.commandMap.has(targetCommandId)) {
-          return;
-        }
-        if (!selectedItemIds.length) {
-          ctx.setStatus("请先勾选要处理的道具。", "error");
-          ctx.render();
-          await ctx.persistState();
-          return;
-        }
-        ctx.clearItemActionMenu();
-        ctx.resetWorkspaceForSuggestion(targetCommandId);
-        ctx.openWorkspace(targetCommandId);
-        ctx.applyItemSuggestionToCommand(targetCommandId, selectedItemIds);
-        ctx.setStatus(`已打开命令并预填 ${selectedItemIds.length} 个道具`, "success");
-        ctx.render();
-        await ctx.persistState();
-      },
       "open-suggested-command": async (ctx, payload) => {
         const targetCommandId = String(payload.node.dataset.commandId || "");
         if (!ctx.commandMap.has(targetCommandId)) {
@@ -156,8 +136,10 @@
         const selectedItemIds = ctx.getSelectedSuggestionItemIds(ctx.state.ui.searchSuggestions);
         if (selectedItemIds.length) {
           ctx.applyItemSuggestionToCommand(targetCommandId, selectedItemIds);
+          ctx.setStatus(`已打开命令并预填 ${selectedItemIds.length} 个道具`, "success");
+        } else {
+          ctx.clearStatus();
         }
-        ctx.clearStatus();
         ctx.render();
         await ctx.persistState();
       },
@@ -297,6 +279,7 @@
           }
           const ws = ctx.ensureWorkspace(payload.commandId);
           ws.output = result.output;
+          ctx.state.ui.pendingConfirm = null;
           ctx.touchCommand(payload.commandId);
           const uid = ctx.inferUid(payload.command, ws);
           if (uid) {
@@ -312,6 +295,18 @@
           return;
         }
         await ctx.copyOutput(payload.command);
+        await ctx.persistState();
+      },
+      "confirm-risk-proceed": async (ctx, payload) => {
+        const pending = ctx.state.ui.pendingConfirm;
+        if (!payload.command || !pending || pending.commandId !== payload.command.id) {
+          return;
+        }
+        await ctx.writeOutput(payload.command, pending.appendMode);
+        await ctx.persistState();
+      },
+      "confirm-risk-cancel": async (ctx) => {
+        ctx.cancelPendingConfirm();
         await ctx.persistState();
       },
       fill: async (ctx, payload) => {
@@ -333,6 +328,7 @@
           return;
         }
         ctx.ensureWorkspace(payload.commandId).output = "";
+        ctx.state.ui.pendingConfirm = null;
         ctx.clearStatus();
         ctx.render();
         await ctx.persistState();
@@ -396,41 +392,6 @@
           return;
         }
         ctx.invertPickerOptions(payload.command, payload.node.dataset.key);
-        ctx.render();
-        await ctx.persistState();
-      },
-      "mail-template-add-selected": async (ctx, payload) => {
-        if (!payload.command) {
-          return;
-        }
-        const key = String(payload.node.dataset.key || "").trim();
-        if (!key) {
-          return;
-        }
-        const ws = ctx.ensureWorkspace(payload.command.id);
-        const selectedIds = ctx.getMultiValues(ws, key);
-        if (!selectedIds.length) {
-          ctx.setStatus("请先勾选要加入的道具", "error");
-          ctx.render();
-          await ctx.persistState();
-          return;
-        }
-        const rows = ctx.getMailTemplateRows(ws, key);
-        const existing = new Set(rows.map((row) => `${row.itemId}:${row.bind}`));
-        let addedCount = 0;
-        selectedIds.forEach((itemId) => {
-          const keyId = `${itemId}:0`;
-          if (existing.has(keyId)) {
-            return;
-          }
-          rows.push({ itemId, count: "1", bind: "0", name: ctx.resolveMailItemName(itemId) });
-          existing.add(keyId);
-          addedCount += 1;
-        });
-        ctx.setMailTemplateRows(ws, key, rows);
-        ws.multiValues[key] = [];
-        ws.output = "";
-        ctx.setStatus(addedCount ? `已加入 ${addedCount} 个道具到附件列表` : "所选道具已在附件列表中", "success");
         ctx.render();
         await ctx.persistState();
       },
@@ -514,8 +475,7 @@
         if (ctx.isSearchComposing() || target.dataset.composing === "1") {
           return;
         }
-        ctx.render();
-        ctx.focusSearchInput(target.value);
+        ctx.updateSearchResults();
         await ctx.persistState();
       },
       currentUid: async (ctx, payload) => {
@@ -544,8 +504,7 @@
           await ctx.persistState();
           return;
         }
-        ctx.render();
-        ctx.focusPickerInput(target.dataset.commandId, target.dataset.key, target.value);
+        ctx.updatePickerMenu(target.dataset.commandId, target.dataset.key);
         await ctx.persistState();
       },
       "workspace-param": async (ctx, payload) => {
@@ -683,6 +642,37 @@
           ws.output = "";
         }
         ctx.clearStatus();
+        ctx.render();
+        await ctx.persistState();
+      },
+      mailTemplateBulkCount: async (ctx, payload) => {
+        const target = payload.target;
+        const ws = ctx.ensureWorkspace(target.dataset.commandId);
+        const key = String(target.dataset.key || "").trim();
+        const nextCount = Number(target.value);
+        if (key && Number.isFinite(nextCount) && nextCount > 0) {
+          const count = String(Math.floor(nextCount));
+          const rows = ctx.getMailTemplateRows(ws, key).map((row) => ({ ...row, count }));
+          ctx.setMailTemplateRows(ws, key, rows);
+          ws.output = "";
+          ctx.setStatus(`已将全部附件数量设为 ${count}`, "success");
+        }
+        target.value = "";
+        ctx.render();
+        await ctx.persistState();
+      },
+      mailTemplateBulkBind: async (ctx, payload) => {
+        const target = payload.target;
+        const ws = ctx.ensureWorkspace(target.dataset.commandId);
+        const key = String(target.dataset.key || "").trim();
+        const value = String(target.value || "");
+        if (key && (value === "0" || value === "1")) {
+          const rows = ctx.getMailTemplateRows(ws, key).map((row) => ({ ...row, bind: value }));
+          ctx.setMailTemplateRows(ws, key, rows);
+          ws.output = "";
+          ctx.setStatus(value === "1" ? "已将全部附件设为绑定" : "已将全部附件设为不绑", "success");
+        }
+        target.value = "";
         ctx.render();
         await ctx.persistState();
       },

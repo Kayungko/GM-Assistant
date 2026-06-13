@@ -209,29 +209,27 @@
         <div class="gm-helper-section-head">
           <div>
             <div class="gm-helper-section-title">搜索推荐</div>
-            <div class="gm-helper-section-desc">先勾选道具，再统一选择操作；不会默认替你预填某一个物品。</div>
+            <div class="gm-helper-section-desc">勾选道具（可选），再选一个操作；不勾则直接打开命令。</div>
           </div>
         </div>
-        <div class="gm-helper-suggest-grid">
-          <div class="gm-helper-suggest-block">
-            <div class="gm-helper-subtitle">推荐操作</div>
-            ${commandSuggestions.length
-            ? `<div class="gm-helper-chip-row gm-helper-suggest-op-row">${commandSuggestions.map((row) => `<button type="button" class="gm-helper-chip" data-action="open-suggested-command" data-command-id="${runtime.escapeHtml(row.commandId)}">${runtime.escapeHtml(row.title)}</button>`).join("")}</div>${commandSuggestions[0].reason ? `<div class="gm-helper-inline-tip">${runtime.escapeHtml(commandSuggestions[0].reason)}</div>` : ""}`
-            : '<div class="gm-helper-empty">未命中推荐操作，请继续输入更精确关键词。</div>'}
+        <div class="gm-helper-suggest-block">
+          <div class="gm-helper-picker-head">
+            <div class="gm-helper-subtitle">推荐道具${hasItemHits ? ` · 已选 ${selectedItemIds.length} 项` : ""}</div>
+            ${hasItemHits ? `<div class="gm-helper-picker-head-actions"><button type="button" class="gm-helper-button gm-helper-button-ghost" data-action="suggestion-select-all">全选当前结果</button><button type="button" class="gm-helper-button gm-helper-button-ghost" data-action="suggestion-invert">反选</button><button type="button" class="gm-helper-button gm-helper-button-ghost" data-action="suggestion-clear">清空</button></div>` : ""}
           </div>
-          <div class="gm-helper-suggest-block">
-            <div class="gm-helper-picker-head">
-              <div class="gm-helper-subtitle">推荐道具</div>
-              ${hasItemHits ? `<div class="gm-helper-picker-head-actions"><button type="button" class="gm-helper-button gm-helper-button-ghost" data-action="suggestion-select-all">全选当前结果</button><button type="button" class="gm-helper-button gm-helper-button-ghost" data-action="suggestion-invert">反选</button><button type="button" class="gm-helper-button gm-helper-button-ghost" data-action="suggestion-clear">清空</button></div>` : ""}
-            </div>
-            ${hasItemHits
-            ? `<div class="gm-helper-inline-tip">当前已选 ${selectedItemIds.length} 项。勾选后可统一带入下方高频物品操作。</div><div class="gm-helper-chip-row gm-helper-suggest-op-row"><button type="button" class="gm-helper-chip" data-action="apply-suggestion-items-action" data-command-id="add_item" ${selectedItemIds.length ? "" : "disabled"}>背包加道具</button><button type="button" class="gm-helper-chip" data-action="apply-suggestion-items-action" data-command-id="summon_item" ${selectedItemIds.length ? "" : "disabled"}>局内刷物品</button></div><div class="gm-helper-suggest-item-list">${itemSuggestions.map((item) => {
+          ${hasItemHits
+            ? `<div class="gm-helper-suggest-item-list">${itemSuggestions.map((item) => {
               const itemId = String(item.itemId || "");
               const checked = selectedSet.has(itemId);
               return `<button type="button" class="gm-helper-suggest-item gm-helper-suggest-item-select ${checked ? "gm-helper-suggest-item-expanded" : ""}" data-action="toggle-suggestion-item" data-item-id="${runtime.escapeHtml(itemId)}"><div class="gm-helper-suggest-item-main"><div class="gm-helper-suggest-item-title">${runtime.escapeHtml(itemId)} ${runtime.escapeHtml(item.name)}</div><div class="gm-helper-suggest-item-meta">${runtime.escapeHtml(item.path)}</div></div><span class="gm-helper-picker-check ${checked ? "gm-helper-picker-check-on" : ""}">${checked ? "✓" : ""}</span></button>`;
             }).join("")}</div>`
             : `<div class="gm-helper-empty">当前词典未命中该道具。</div><div class="gm-helper-button-row"><button type="button" id="gm-helper-import-guide-btn" class="gm-helper-button gm-helper-button-secondary" data-action="goto-settings-import">前往设置页导入 Item.xlsx</button></div>`}
-          </div>
+        </div>
+        <div class="gm-helper-suggest-block">
+          <div class="gm-helper-subtitle">选择操作</div>
+          ${commandSuggestions.length
+            ? `<div class="gm-helper-chip-row gm-helper-suggest-op-row">${commandSuggestions.map((row) => `<button type="button" class="gm-helper-chip" data-action="open-suggested-command" data-command-id="${runtime.escapeHtml(row.commandId)}">${runtime.escapeHtml(row.title)}</button>`).join("")}</div>${commandSuggestions[0].reason ? `<div class="gm-helper-inline-tip">${runtime.escapeHtml(commandSuggestions[0].reason)}</div>` : ""}`
+            : '<div class="gm-helper-empty">未命中推荐操作，请继续输入更精确关键词。</div>'}
         </div>
       </section>
     `;
@@ -329,7 +327,7 @@
         desc: "生成结果可复制、填入或追加至后台输入框；默认不自动发送。",
         defaultCollapsed: false,
         rightMeta: `<div class="gm-helper-result-meta">共 ${runtime.lineCount(ws.output)} 条命令</div>`,
-        body: `<textarea class="gm-helper-textarea gm-helper-output" data-field="workspace-output" data-command-id="${command.id}" placeholder="点击“生成命令”后显示在这里">${runtime.escapeHtml(ws.output)}</textarea><div class="gm-helper-button-row"><button type="button" class="gm-helper-button gm-helper-button-accent" data-action="generate" data-command-id="${command.id}">生成命令</button><button type="button" class="gm-helper-button gm-helper-button-secondary" data-action="copy" data-command-id="${command.id}">复制</button><button type="button" class="gm-helper-button gm-helper-button-secondary" data-action="fill" data-command-id="${command.id}">填入后台</button><button type="button" class="gm-helper-button gm-helper-button-secondary" data-action="append" data-command-id="${command.id}">追加到后台</button><button type="button" class="gm-helper-button gm-helper-button-ghost" data-action="clear-output" data-command-id="${command.id}">清空结果</button></div>`
+        body: `<textarea class="gm-helper-textarea gm-helper-output" data-field="workspace-output" data-command-id="${command.id}" placeholder="点击“生成命令”后显示在这里">${runtime.escapeHtml(ws.output)}</textarea><div class="gm-helper-button-row"><button type="button" class="gm-helper-button gm-helper-button-accent" data-action="generate" data-command-id="${command.id}">生成命令</button><button type="button" class="gm-helper-button gm-helper-button-secondary" data-action="copy" data-command-id="${command.id}">复制</button><button type="button" class="gm-helper-button gm-helper-button-secondary" data-action="fill" data-command-id="${command.id}">填入后台</button><button type="button" class="gm-helper-button gm-helper-button-secondary" data-action="append" data-command-id="${command.id}">追加到后台</button><button type="button" class="gm-helper-button gm-helper-button-ghost" data-action="clear-output" data-command-id="${command.id}">清空结果</button></div>${(() => { const pc = runtime.state.ui.pendingConfirm; return pc && pc.commandId === command.id ? `<div class="gm-helper-confirm-bar"><div class="gm-helper-confirm-msg">${runtime.escapeHtml(pc.message)}</div><div class="gm-helper-button-row"><button type="button" class="gm-helper-button gm-helper-button-danger" data-action="confirm-risk-proceed" data-command-id="${command.id}">确认${pc.appendMode ? "追加" : "填入"}</button><button type="button" class="gm-helper-button gm-helper-button-ghost" data-action="confirm-risk-cancel" data-command-id="${command.id}">取消</button></div></div>` : ""; })()}`
       })}
     `;
       }

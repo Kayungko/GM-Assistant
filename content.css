@@ -1606,6 +1606,28 @@
   margin-top: var(--gm-space-xxs);
 }
 
+.gm-helper-mail-item-list-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--gm-space-sm);
+  flex-wrap: wrap;
+}
+
+.gm-helper-mail-item-bulk {
+  display: flex;
+  align-items: center;
+  gap: var(--gm-space-xs);
+}
+
+.gm-helper-mail-item-bulk .gm-helper-mail-item-count {
+  width: 72px;
+}
+
+.gm-helper-mail-item-bulk .gm-helper-mail-item-bind {
+  width: auto;
+}
+
 .gm-helper-mail-item-scroll {
   max-height: 220px;
   overflow-y: auto;
@@ -2001,6 +2023,23 @@
   color: #667085;
 }
 
+.gm-helper-confirm-bar {
+  margin-top: var(--gm-space-md);
+  padding: var(--gm-space-md) var(--gm-space-lg);
+  border: 1px solid var(--gm-danger);
+  border-radius: var(--gm-radius-md, 8px);
+  background: rgba(217, 45, 32, 0.06);
+  display: flex;
+  flex-direction: column;
+  gap: var(--gm-space-sm);
+}
+
+.gm-helper-confirm-msg {
+  font-size: 13px;
+  line-height: 1.5;
+  color: var(--gm-danger);
+}
+
 .gm-helper-result-meta {
   font-size: 12px;
   font-weight: 700;
@@ -2053,4 +2092,40 @@
   .gm-helper-workspace-head {
     flex-direction: column;
   }
+}
+
+#gm-helper-toast {
+  position: fixed !important;
+  right: 24px !important;
+  bottom: 24px !important;
+  z-index: 2147483647 !important;
+  max-width: 360px !important;
+  padding: 12px 16px !important;
+  border-radius: 10px !important;
+  font-size: 13px !important;
+  line-height: 1.5 !important;
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif !important;
+  color: #ffffff !important;
+  box-shadow: 0 8px 24px rgba(15, 23, 42, 0.28) !important;
+  opacity: 0 !important;
+  transform: translateY(12px) !important;
+  pointer-events: none !important;
+  visibility: hidden !important;
+  transition: opacity 0.22s ease, transform 0.22s ease !important;
+  white-space: pre-wrap !important;
+  word-break: break-word !important;
+}
+
+#gm-helper-toast.gm-helper-toast-show {
+  opacity: 1 !important;
+  transform: translateY(0) !important;
+  visibility: visible !important;
+}
+
+#gm-helper-toast.gm-helper-toast-success {
+  background: #067647 !important;
+}
+
+#gm-helper-toast.gm-helper-toast-error {
+  background: #b42318 !important;
 }

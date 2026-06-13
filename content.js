@@ -206,6 +206,7 @@
   let isSearchComposing = false;
   let pickerComposingKey = "";
   let fabDragState = null;
+  let toastTimer = null;
   let sidebarResizeState = null;
   let updateCheckPromise = null;
   let runtimeServices = null;
@@ -1646,8 +1647,14 @@
     const sidebar = document.createElement("aside");
     sidebar.id = "gm-helper-sidebar";
 
+    const toast = document.createElement("div");
+    toast.id = "gm-helper-toast";
+    toast.setAttribute("role", "status");
+    toast.setAttribute("aria-live", "polite");
+
     document.documentElement.appendChild(fab);
     document.documentElement.appendChild(sidebar);
+    document.documentElement.appendChild(toast);
 
     applyFabPosition(fab);
     applySidebarWidth(sidebar);
@@ -1669,6 +1676,9 @@
       }
       clearStatus();
       render();
+      if (willOpen) {
+        window.setTimeout(() => focusSearchInput(state.ui.searchQuery), 0);
+      }
     });
 
     sidebar.addEventListener("click", onClick);
@@ -1706,7 +1716,7 @@
 
       const deltaX = Math.abs(event.clientX - fabDragState.startX);
       const deltaY = Math.abs(event.clientY - fabDragState.startY);
-      if (!fabDragState.didDrag && deltaX + deltaY < 4) {
+      if (!fabDragState.didDrag && deltaX + deltaY < 7) {
         return;
       }
 
@@ -1885,8 +1895,7 @@
       clearSuggestionSelection();
       clearItemActionMenu();
       clearStatus();
-      render();
-      focusSearchInput(event.target.value);
+      updateSearchResults();
       await persistState();
       return;
     }
@@ -1897,8 +1906,7 @@
       ws.pickerQueries[event.target.dataset.key] = event.target.value;
       ws.pickerCursor[event.target.dataset.key] = 0;
       clearStatus();
-      render();
-      focusPickerInput(event.target.dataset.commandId, event.target.dataset.key, event.target.value);
+      updatePickerMenu(event.target.dataset.commandId, event.target.dataset.key);
       await persistState();
     }
   }
@@ -1968,6 +1976,7 @@
       touchCommand,
       copyOutput,
       writeOutput,
+      cancelPendingConfirm,
       savePreset,
       loadPreset,
       deletePreset,
@@ -1986,6 +1995,9 @@
       bindExternalCatalogFile,
       focusSearchInput,
       focusPickerInput,
+      updatePickerMenu,
+      updatePickerFocusedOption,
+      updateSearchResults,
       buildPickerComposeKey,
       getPickerComposingKey: () => pickerComposingKey,
       isSearchComposing: () => isSearchComposing
@@ -2038,7 +2050,46 @@
       return;
     }
     const target = event.target;
-    if (target?.dataset?.field !== "pickerQuery") {
+    const field = target?.dataset?.field;
+
+    if (event.key === "Escape") {
+      const pickerHasText = field === "pickerQuery" && String(target.value || "").length > 0;
+      if (!pickerHasText) {
+        event.preventDefault();
+        document.getElementById("gm-helper-sidebar")?.classList.remove("gm-helper-open");
+        return;
+      }
+    }
+
+    if (field === "searchQuery" && event.key === "Enter") {
+      event.preventDefault();
+      const query = state.ui.searchQuery.trim();
+      if (!query) {
+        return;
+      }
+      const suggestions = buildSearchSuggestions(query, {});
+      const firstSuggested = suggestions.commands?.[0]?.commandId;
+      const fallback = firstSuggested ? "" : (searchCommands(query)[0]?.command?.id || "");
+      const targetCommandId = firstSuggested || fallback;
+      if (targetCommandId && COMMAND_MAP.has(targetCommandId)) {
+        clearItemActionMenu();
+        resetWorkspaceForSuggestion(targetCommandId);
+        openWorkspace(targetCommandId);
+        const selectedItemIds = getSelectedSuggestionItemIds(state.ui.searchSuggestions);
+        if (selectedItemIds.length) {
+          applyItemSuggestionToCommand(targetCommandId, selectedItemIds);
+        }
+        render();
+        await persistState();
+      } else {
+        setStatus("未匹配到命令，请调整关键词。", "error");
+        render();
+        focusSearchInput(query);
+      }
+      return;
+    }
+
+    if (field !== "pickerQuery") {
       return;
     }
 
@@ -2068,16 +2119,14 @@
     if (event.key === "ArrowDown") {
       event.preventDefault();
       ws.pickerCursor[key] = Math.min(current + 1, max);
-      render();
-      focusPickerInput(commandId, key, ws.pickerQueries[key] || "");
+      updatePickerFocusedOption(commandId, key, ws.pickerCursor[key]);
       await persistState();
       return;
     }
     if (event.key === "ArrowUp") {
       event.preventDefault();
       ws.pickerCursor[key] = Math.max(current - 1, 0);
-      render();
-      focusPickerInput(commandId, key, ws.pickerQueries[key] || "");
+      updatePickerFocusedOption(commandId, key, ws.pickerCursor[key]);
       await persistState();
       return;
     }
@@ -2112,6 +2161,7 @@
     state.ui.libraryView = "workspace";
     state.ui.selectedCommandId = commandId;
     state.userContext.lastCommandId = commandId;
+    state.ui.pendingConfirm = null;
     touchCommand(commandId);
     clearStatus();
     render();
@@ -2343,21 +2393,39 @@
     if (!output) {
       return;
     }
-    if (!await confirmRisk(command)) {
-      setStatus("已取消执行", "error");
-      render();
-      return;
+    const append = Boolean(appendMode);
+    if (isRiskyCommand(command)) {
+      const pending = state.ui.pendingConfirm;
+      const matched = pending && pending.commandId === command.id && pending.appendMode === append;
+      if (!matched) {
+        state.ui.pendingConfirm = {
+          commandId: command.id,
+          appendMode: append,
+          message: `命令“${command.title}”属于${riskLabel(command.risk)}操作，确认${append ? "追加到" : "填入"}后台输入框？`
+        };
+        render();
+        return;
+      }
     }
-    const ok = appendMode
+    state.ui.pendingConfirm = null;
+    const ok = append
       ? runtimeServices.targetWriter.append(output)
       : runtimeServices.targetWriter.fill(output);
     if (ok) {
       touchCommand(command.id);
-      setStatus(appendMode ? "已追加到后台输入框" : "已填入后台输入框", "success");
+      setStatus(append ? "已追加到后台输入框" : "已填入后台输入框", "success");
     } else {
       setStatus("未找到可写入的后台输入框，请先点击 GM 后台的输入框", "error");
     }
     render();
+  }
+
+  function cancelPendingConfirm() {
+    if (state.ui.pendingConfirm) {
+      state.ui.pendingConfirm = null;
+      setStatus("已取消执行", "error");
+      render();
+    }
   }
 
   async function sendToBackendInput(query) {
@@ -2371,15 +2439,8 @@
     render();
   }
 
-  async function confirmRisk(command) {
-    if (!command || command.risk === "normal" || state.personalData.confirmedRiskCommands.includes(command.id)) {
-      return true;
-    }
-    const ok = window.confirm(`命令“${command.title}”属于${riskLabel(command.risk)}操作，首次填入前请确认。\n\n是否继续？`);
-    if (ok) {
-      state.personalData.confirmedRiskCommands = uniqCommandIds([command.id, ...state.personalData.confirmedRiskCommands]);
-    }
-    return ok;
+  function isRiskyCommand(command) {
+    return Boolean(command) && command.risk !== "normal";
   }
 
   function savePreset(command) {
@@ -2633,7 +2694,7 @@
     const isWorkspaceView = isLibraryTab && state.ui.libraryView === "workspace" && command && ws;
     const shouldShowSuggestionPanel = isLibraryTab && Boolean(searchQuery);
     const title = isWorkspaceView ? escapeHtml(command?.title || "命令工作台") : escapeHtml(getTabTitle(state.ui.tab));
-    const libraryHtml = `${renderLibraryTop(command)}${shouldShowSuggestionPanel ? renderSearchSuggestionPanel(suggestions) : ""}${isWorkspaceView ? renderWorkspace(command, ws) : renderLibraryList(results, suggestions)}`;
+    const libraryHtml = `${renderLibraryTop(command)}<div id="gm-helper-library-dynamic">${shouldShowSuggestionPanel ? renderSearchSuggestionPanel(suggestions) : ""}${isWorkspaceView ? renderWorkspace(command, ws) : renderLibraryList(results, suggestions)}</div>`;
     const updateModalHtml = renderUpdateModal();
     sidebar.innerHTML = `
       <div class="gm-helper-resize-handle" data-role="sidebar-resize-handle" title="拖拽调整宽度"></div>
@@ -2764,7 +2825,9 @@
     }
     ws.output = "";
     const mode = targetParam.inputMode || targetParam.type;
-    if (mode === "picker_multi" || mode === "enum_multi") {
+    if (mode === "picker_mail_item_list") {
+      setMailTemplateRows(ws, targetParam.key, values.map((value) => ({ itemId: value, count: "1", bind: "0", name: resolveMailItemName(value) })));
+    } else if (mode === "picker_multi" || mode === "enum_multi") {
       ws.multiValues[targetParam.key] = values;
       ws.values[targetParam.key] = values.join(",");
     } else {
@@ -3197,6 +3260,98 @@
     `;
   }
 
+  function renderPickerOptionsHtml(command, p, options, cursor, selected, opts) {
+    const config = opts || {};
+    if (!options.length) {
+      const emptyHint = config.emptyHint || "";
+      const guide = config.showItemImportGuide
+        ? '<div class="gm-helper-button-row"><button type="button" class="gm-helper-button gm-helper-button-secondary" data-action="goto-settings-import">前往设置页导入 Item.xlsx</button></div>'
+        : "";
+      return `<div class="gm-helper-empty">${escapeHtml(emptyHint)}</div>${guide}`;
+    }
+    return options.map((opt, index) => {
+      const checked = selected.includes(opt.value);
+      return `<button type="button" class="gm-helper-picker-option ${checked ? "gm-helper-picker-option-active" : ""} ${index === cursor ? "gm-helper-picker-option-focused" : ""}" data-action="picker-toggle-option" data-command-id="${command.id}" data-key="${p.key}" data-option-index="${index}" data-value="${escapeHtml(opt.value)}"><span class="gm-helper-picker-option-text">${escapeHtml(opt.label)}</span><span class="gm-helper-picker-check ${checked ? "gm-helper-picker-check-on" : ""}">${checked ? "✓" : ""}</span></button>`;
+    }).join("");
+  }
+
+  function getPickerSelectedValues(command, ws, p) {
+    const mode = p.inputMode || p.type;
+    if (mode === "picker_mail_item_list") {
+      return getMailTemplateRows(ws, p.key).map((row) => row.itemId);
+    }
+    if (mode === "picker_multi" || mode === "enum_multi") {
+      return getMultiValues(ws, p.key);
+    }
+    return ws.values[p.key] ? [ws.values[p.key]] : [];
+  }
+
+  function updatePickerMenu(commandId, key) {
+    const command = COMMAND_MAP.get(commandId);
+    if (!command) {
+      render();
+      return;
+    }
+    const ws = ensureWorkspace(commandId);
+    const p = getParam(command, key);
+    if (!p) {
+      render();
+      return;
+    }
+    const menu = document.querySelector(`[data-picker-menu][data-command-id="${escapeForSelector(commandId)}"][data-key="${escapeForSelector(key)}"]`);
+    if (!menu) {
+      render();
+      return;
+    }
+    const query = ws.pickerQueries[key] || "";
+    const hasQuery = Boolean(normalizeSearch(query || ""));
+    const hideEmptyPickerMenu = isItemPickerParam(p) && !hasQuery;
+    const selected = getPickerSelectedValues(command, ws, p);
+    const options = getPickerOptions(p, query, selected, ws);
+    if (hideEmptyPickerMenu && !options.length) {
+      render();
+      focusPickerInput(commandId, key, query);
+      return;
+    }
+    const cursor = Math.max(0, Math.min(Number(ws.pickerCursor[key] || 0), Math.max(options.length - 1, 0)));
+    const emptyHint = getPickerEmptyHint(p, ws, query, options);
+    const showItemImportGuide = isItemPickerParam(p) && hasQuery && !options.length;
+    menu.innerHTML = renderPickerOptionsHtml(command, p, options, cursor, selected, { emptyHint, showItemImportGuide });
+  }
+
+  function updatePickerFocusedOption(commandId, key, index) {
+    const menu = document.querySelector(`[data-picker-menu][data-command-id="${escapeForSelector(commandId)}"][data-key="${escapeForSelector(key)}"]`);
+    if (!menu) {
+      render();
+      return;
+    }
+    const options = menu.querySelectorAll(".gm-helper-picker-option");
+    if (!options.length) {
+      return;
+    }
+    options.forEach((node, idx) => {
+      node.classList.toggle("gm-helper-picker-option-focused", idx === index);
+    });
+    const active = options[index];
+    if (active && active.scrollIntoView) {
+      active.scrollIntoView({ block: "nearest" });
+    }
+  }
+
+  function updateSearchResults() {
+    const container = document.getElementById("gm-helper-library-dynamic");
+    if (!container || state.ui.tab !== "library" || state.ui.libraryView === "workspace") {
+      render();
+      focusSearchInput(state.ui.searchQuery);
+      return;
+    }
+    const searchQuery = state.ui.searchQuery.trim();
+    const results = searchQuery ? searchCommands(searchQuery) : [];
+    const suggestions = buildSearchSuggestions(searchQuery, { command: null, ws: null, isWorkspaceView: false });
+    state.ui.searchSuggestions = suggestions;
+    container.innerHTML = `${searchQuery ? renderSearchSuggestionPanel(suggestions) : ""}${renderLibraryList(results, suggestions)}`;
+  }
+
   function renderField(command, ws, p) {
     const helper = paramHelper(p);
     const span = p.type === "textarea" ? " gm-helper-field-grow" : "";
@@ -3222,9 +3377,9 @@
       const hasQuery = Boolean(normalizeSearch(query || ""));
       const showItemImportGuide = isItemPickerParam(p) && hasQuery && !options.length;
       const hideEmptyPickerMenu = isItemPickerParam(p) && !hasQuery && !options.length;
-      const queryPlaceholder = isItemPickerParam(p)
+      const queryPlaceholder = (isItemPickerParam(p)
         ? (isMulti ? "输入名称/ID开始搜索，可多选" : "输入名称/ID开始搜索，单选")
-        : (p.placeholder || "输入关键字筛选");
+        : (p.placeholder || "输入关键字筛选")) + " · ↑↓选择 Enter勾选";
       return `
         <div class="gm-helper-field gm-helper-field-grow">
           <div class="gm-helper-picker-head">
@@ -3241,12 +3396,7 @@
             ${selected.length ? `<div class="gm-helper-selected-chip-list"><div class="gm-helper-chip-row">${selected.map((id) => `<span class="gm-helper-chip gm-helper-chip-ghost">${escapeHtml(resolveOptionLabel(p, id, ws))}</span>`).join("")}</div></div>` : ""}
             ${hideEmptyPickerMenu
               ? (selected.length ? `<div class="gm-helper-picker-note">已选 ${selected.length} 项，继续输入名称/ID可追加。</div>` : "")
-              : `<div class="gm-helper-picker-menu">
-                ${options.length ? options.map((opt, index) => {
-                  const checked = selected.includes(opt.value);
-                  return `<button type="button" class="gm-helper-picker-option ${checked ? "gm-helper-picker-option-active" : ""} ${index === cursor ? "gm-helper-picker-option-focused" : ""}" data-action="picker-toggle-option" data-command-id="${command.id}" data-key="${p.key}" data-option-index="${index}" data-value="${escapeHtml(opt.value)}"><span class="gm-helper-picker-option-text">${escapeHtml(opt.label)}</span><span class="gm-helper-picker-check ${checked ? "gm-helper-picker-check-on" : ""}">${checked ? "✓" : ""}</span></button>`;
-                }).join("") : `<div class="gm-helper-empty">${escapeHtml(emptyHint)}</div>${showItemImportGuide ? '<div class="gm-helper-button-row"><button type="button" class="gm-helper-button gm-helper-button-secondary" data-action="goto-settings-import">前往设置页导入 Item.xlsx</button></div>' : ""}`}
-              </div>`}
+              : `<div class="gm-helper-picker-menu" data-picker-menu data-command-id="${command.id}" data-key="${p.key}">${renderPickerOptionsHtml(command, p, options, cursor, selected, { emptyHint, showItemImportGuide })}</div>`}
           </div>
           ${helper ? `<div class="gm-helper-inline-tip">${escapeHtml(helper)}</div>` : ""}
         </div>
@@ -3280,12 +3430,12 @@
 
   function renderMailTemplateItemBuilderField(command, ws, p, label, helper) {
     const query = ws.pickerQueries[p.key] || "";
-    const selected = getMultiValues(ws, p.key);
+    const rows = getMailTemplateRows(ws, p.key);
+    const selected = rows.map((row) => row.itemId);
     const options = getPickerOptions(p, query, selected, ws);
     const cursor = Math.max(0, Math.min(Number(ws.pickerCursor[p.key] || 0), Math.max(options.length - 1, 0)));
     const emptyHint = getPickerEmptyHint(p, ws, query, options);
     const itemFilterPanel = renderItemPickerFilters(command, ws, p);
-    const rows = getMailTemplateRows(ws, p.key);
     return `
       <div class="gm-helper-field gm-helper-field-grow">
         <div class="gm-helper-picker-head">
@@ -3298,19 +3448,21 @@
         </div>
         <div class="gm-helper-picker">
           ${itemFilterPanel}
-          <input class="gm-helper-input" data-field="pickerQuery" data-command-id="${command.id}" data-key="${p.key}" placeholder="输入名称/ID开始搜索，可多选" value="${escapeHtml(query)}" />
-          <div class="gm-helper-button-row">
-            <button type="button" class="gm-helper-button gm-helper-button-accent" data-action="mail-template-add-selected" data-command-id="${command.id}" data-key="${p.key}">加入附件列表</button>
-            <button type="button" class="gm-helper-button gm-helper-button-secondary" data-action="mail-template-clear-items" data-command-id="${command.id}" data-key="${p.key}" ${rows.length ? "" : "disabled"}>清空附件列表</button>
-          </div>
-          <div class="gm-helper-picker-menu">
-            ${options.length ? options.map((opt, index) => {
-              const checked = selected.includes(opt.value);
-              return `<button type="button" class="gm-helper-picker-option ${checked ? "gm-helper-picker-option-active" : ""} ${index === cursor ? "gm-helper-picker-option-focused" : ""}" data-action="picker-toggle-option" data-command-id="${command.id}" data-key="${p.key}" data-option-index="${index}" data-value="${escapeHtml(opt.value)}"><span class="gm-helper-picker-option-text">${escapeHtml(opt.label)}</span><span class="gm-helper-picker-check ${checked ? "gm-helper-picker-check-on" : ""}">${checked ? "✓" : ""}</span></button>`;
-            }).join("") : `<div class="gm-helper-empty">${escapeHtml(emptyHint)}</div>`}
-          </div>
+          <input class="gm-helper-input" data-field="pickerQuery" data-command-id="${command.id}" data-key="${p.key}" placeholder="输入名称/ID开始搜索，勾选即加入附件 · ↑↓选择 Enter勾选" value="${escapeHtml(query)}" />
+          <div class="gm-helper-picker-menu" data-picker-menu data-command-id="${command.id}" data-key="${p.key}">${renderPickerOptionsHtml(command, p, options, cursor, selected, { emptyHint, showItemImportGuide: false })}</div>
           <div class="gm-helper-mail-item-list">
-            <div class="gm-helper-subtitle">已加入附件（${rows.length}）</div>
+            <div class="gm-helper-mail-item-list-head">
+              <div class="gm-helper-subtitle">已加入附件（${rows.length}）</div>
+              <div class="gm-helper-mail-item-bulk">
+                <input class="gm-helper-input gm-helper-mail-item-count" type="number" min="1" placeholder="数量" data-field="mailTemplateBulkCount" data-command-id="${command.id}" data-key="${p.key}" ${rows.length ? "" : "disabled"} />
+                <select class="gm-helper-select gm-helper-mail-item-bind" data-field="mailTemplateBulkBind" data-command-id="${command.id}" data-key="${p.key}" ${rows.length ? "" : "disabled"}>
+                  <option value="">批量绑定…</option>
+                  <option value="0">全部不绑(0)</option>
+                  <option value="1">全部绑定(1)</option>
+                </select>
+                <button type="button" class="gm-helper-button gm-helper-button-secondary" data-action="mail-template-clear-items" data-command-id="${command.id}" data-key="${p.key}" ${rows.length ? "" : "disabled"}>清空</button>
+              </div>
+            </div>
             ${rows.length
               ? `<div class="gm-helper-mail-item-scroll">${rows.map((row) => `<div class="gm-helper-mail-item-row"><div class="gm-helper-mail-item-main"><div class="gm-helper-mail-item-title"><span class="gm-helper-mail-item-id">${escapeHtml(row.itemId)}</span><span class="gm-helper-mail-item-name">${escapeHtml(row.name || "")}</span></div><div class="gm-helper-mail-item-meta">${escapeHtml(`${row.itemId}/${row.count}/${row.bind}`)}</div></div><div class="gm-helper-mail-item-edit"><input class="gm-helper-input gm-helper-mail-item-count" type="number" min="1" data-field="mailTemplateItemCount" data-command-id="${command.id}" data-key="${p.key}" data-item-id="${escapeHtml(row.itemId)}" data-bind="${escapeHtml(row.bind)}" value="${escapeHtml(row.count)}" /><select class="gm-helper-select gm-helper-mail-item-bind" data-field="mailTemplateItemBind" data-command-id="${command.id}" data-key="${p.key}" data-item-id="${escapeHtml(row.itemId)}" data-bind="${escapeHtml(row.bind)}"><option value="0" ${row.bind === "0" ? "selected" : ""}>不绑(0)</option><option value="1" ${row.bind === "1" ? "selected" : ""}>绑定(1)</option></select><button type="button" class="gm-helper-button gm-helper-button-danger" data-action="mail-template-remove-item" data-command-id="${command.id}" data-key="${p.key}" data-item-id="${escapeHtml(row.itemId)}" data-bind="${escapeHtml(row.bind)}">删</button></div></div>`).join("")}</div>`
               : `<div class="gm-helper-empty">请先从上方搜索并加入道具，生成时会自动拼成 itemid/num/bind 列表。</div>`}
@@ -3573,13 +3725,13 @@
     const mode = param.inputMode || param.type;
 
     if (mode === "picker_mail_item_list") {
-      const current = new Set(getMultiValues(ws, key));
-      if (current.has(value)) {
-        current.delete(value);
-      } else {
-        current.add(value);
-      }
-      ws.multiValues[key] = sortValuesByOptionOrder(Array.from(current), param, ws);
+      const rows = getMailTemplateRows(ws, key);
+      const has = rows.some((row) => row.itemId === value);
+      const nextRows = has
+        ? rows.filter((row) => row.itemId !== value)
+        : [...rows, { itemId: value, count: "1", bind: "0", name: resolveMailItemName(value) }];
+      setMailTemplateRows(ws, key, nextRows);
+      ws.output = "";
       return;
     }
 
@@ -3602,7 +3754,8 @@
     const param = getParam(command, key);
     const mode = String(param?.inputMode || param?.type || "");
     if (mode === "picker_mail_item_list") {
-      ws.multiValues[key] = [];
+      setMailTemplateRows(ws, key, []);
+      ws.output = "";
       ws.pickerQueries[key] = "";
       ws.pickerCursor[key] = 0;
       return;
@@ -3619,7 +3772,13 @@
     const options = getPickerOptions(param, ws.pickerQueries[key] || "", [], ws);
     const mode = String(param?.inputMode || param?.type || "");
     if (mode === "picker_mail_item_list") {
-      ws.multiValues[key] = options.map((x) => x.value);
+      const rows = getMailTemplateRows(ws, key);
+      const existing = new Set(rows.map((row) => row.itemId));
+      const additions = options
+        .filter((opt) => !existing.has(opt.value))
+        .map((opt) => ({ itemId: opt.value, count: "1", bind: "0", name: resolveMailItemName(opt.value) }));
+      setMailTemplateRows(ws, key, [...rows, ...additions]);
+      ws.output = "";
       ws.pickerCursor[key] = 0;
       return;
     }
@@ -3632,14 +3791,21 @@
     const ws = ensureWorkspace(command.id);
     const param = getParam(command, key);
     const options = getPickerOptions(param, ws.pickerQueries[key] || "", [], ws);
-    const current = new Set(getMultiValues(ws, key));
-    const next = options.map((x) => x.value).filter((id) => !current.has(id));
     const mode = String(param?.inputMode || param?.type || "");
     if (mode === "picker_mail_item_list") {
-      ws.multiValues[key] = next;
+      const rows = getMailTemplateRows(ws, key);
+      const existing = new Set(rows.map((row) => row.itemId));
+      const keep = rows.filter((row) => !options.some((opt) => opt.value === row.itemId));
+      const additions = options
+        .filter((opt) => !existing.has(opt.value))
+        .map((opt) => ({ itemId: opt.value, count: "1", bind: "0", name: resolveMailItemName(opt.value) }));
+      setMailTemplateRows(ws, key, [...keep, ...additions]);
+      ws.output = "";
       ws.pickerCursor[key] = 0;
       return;
     }
+    const current = new Set(getMultiValues(ws, key));
+    const next = options.map((x) => x.value).filter((id) => !current.has(id));
     ws.multiValues[key] = next;
     ws.values[key] = next.join(",");
     ws.pickerCursor[key] = 0;
@@ -4320,6 +4486,29 @@
 
   function setStatus(message, kind) {
     state.ui.status = { message, kind };
+    showToast(message, kind);
+  }
+
+  function showToast(message, kind) {
+    const text = String(message || "").trim();
+    if (!text) {
+      return;
+    }
+    const toast = document.getElementById("gm-helper-toast");
+    if (!toast) {
+      return;
+    }
+    if (toastTimer) {
+      window.clearTimeout(toastTimer);
+      toastTimer = null;
+    }
+    const isError = kind === "error";
+    toast.textContent = text;
+    toast.className = `gm-helper-toast-show ${isError ? "gm-helper-toast-error" : "gm-helper-toast-success"}`;
+    toastTimer = window.setTimeout(() => {
+      toast.classList.remove("gm-helper-toast-show");
+      toastTimer = null;
+    }, isError ? 6000 : 3000);
   }
 
   function clearStatus() {
