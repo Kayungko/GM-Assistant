@@ -1998,6 +1998,10 @@
       updatePickerMenu,
       updatePickerFocusedOption,
       updateSearchResults,
+      getPickerMenuScroll,
+      setPickerMenuScroll,
+      getSuggestionListScroll,
+      setSuggestionListScroll,
       buildPickerComposeKey,
       getPickerComposingKey: () => pickerComposingKey,
       isSearchComposing: () => isSearchComposing
@@ -2136,8 +2140,10 @@
       if (!focused) {
         return;
       }
+      const scrollTop = getPickerMenuScroll(commandId, key);
       togglePickerOption(command, key, focused.value);
       render();
+      setPickerMenuScroll(commandId, key, scrollTop);
       focusPickerInput(commandId, key, ws.pickerQueries[key] || "");
       await persistState();
       return;
@@ -3335,6 +3341,36 @@
     const active = options[index];
     if (active && active.scrollIntoView) {
       active.scrollIntoView({ block: "nearest" });
+    }
+  }
+
+  function getPickerMenuScroll(commandId, key) {
+    const menu = document.querySelector(`[data-picker-menu][data-command-id="${escapeForSelector(commandId)}"][data-key="${escapeForSelector(key)}"]`);
+    return menu ? menu.scrollTop : 0;
+  }
+
+  function setPickerMenuScroll(commandId, key, scrollTop) {
+    if (!scrollTop) {
+      return;
+    }
+    const menu = document.querySelector(`[data-picker-menu][data-command-id="${escapeForSelector(commandId)}"][data-key="${escapeForSelector(key)}"]`);
+    if (menu) {
+      menu.scrollTop = scrollTop;
+    }
+  }
+
+  function getSuggestionListScroll() {
+    const list = document.querySelector(".gm-helper-suggest-item-list");
+    return list ? list.scrollTop : 0;
+  }
+
+  function setSuggestionListScroll(scrollTop) {
+    if (!scrollTop) {
+      return;
+    }
+    const list = document.querySelector(".gm-helper-suggest-item-list");
+    if (list) {
+      list.scrollTop = scrollTop;
     }
   }
 

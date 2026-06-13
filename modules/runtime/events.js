@@ -102,13 +102,17 @@
         }
         ctx.state.ui.suggestionSelection = Array.from(current);
         ctx.clearStatus();
+        const scrollTop = ctx.getSuggestionListScroll();
         ctx.render();
+        ctx.setSuggestionListScroll(scrollTop);
         await ctx.persistState();
       },
       "suggestion-select-all": async (ctx) => {
         ctx.state.ui.suggestionSelection = ctx.normalizeSuggestionSelection((ctx.state.ui.searchSuggestions?.items || []).map((item) => item.itemId));
         ctx.clearStatus();
+        const scrollTop = ctx.getSuggestionListScroll();
         ctx.render();
+        ctx.setSuggestionListScroll(scrollTop);
         await ctx.persistState();
       },
       "suggestion-invert": async (ctx) => {
@@ -116,13 +120,17 @@
         const selected = new Set(ctx.normalizeSuggestionSelection(ctx.state.ui.suggestionSelection));
         ctx.state.ui.suggestionSelection = availableIds.filter((itemId) => !selected.has(itemId));
         ctx.clearStatus();
+        const scrollTop = ctx.getSuggestionListScroll();
         ctx.render();
+        ctx.setSuggestionListScroll(scrollTop);
         await ctx.persistState();
       },
       "suggestion-clear": async (ctx) => {
         ctx.clearSuggestionSelection();
         ctx.clearStatus();
+        const scrollTop = ctx.getSuggestionListScroll();
         ctx.render();
+        ctx.setSuggestionListScroll(scrollTop);
         await ctx.persistState();
       },
       "open-suggested-command": async (ctx, payload) => {
@@ -365,10 +373,15 @@
         if (!payload.command) {
           return;
         }
-        ctx.togglePickerOption(payload.command, payload.node.dataset.key, payload.node.dataset.value);
-        const ws = ctx.ensureWorkspace(payload.command.id);
-        ws.pickerCursor[payload.node.dataset.key] = Math.max(0, Number(payload.node.dataset.optionIndex || 0));
+        const key = payload.node.dataset.key;
+        const commandId = payload.command.id;
+        const scrollTop = ctx.getPickerMenuScroll(commandId, key);
+        ctx.togglePickerOption(payload.command, key, payload.node.dataset.value);
+        const ws = ctx.ensureWorkspace(commandId);
+        ws.pickerCursor[key] = Math.max(0, Number(payload.node.dataset.optionIndex || 0));
         ctx.render();
+        ctx.setPickerMenuScroll(commandId, key, scrollTop);
+        ctx.focusPickerInput(commandId, key, ws.pickerQueries[key] || "");
         await ctx.persistState();
       },
       "picker-clear": async (ctx, payload) => {
