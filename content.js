@@ -2435,19 +2435,6 @@
       return;
     }
     const append = Boolean(appendMode);
-    if (isRiskyCommand(command)) {
-      const pending = state.ui.pendingConfirm;
-      const matched = pending && pending.commandId === command.id && pending.appendMode === append;
-      if (!matched) {
-        state.ui.pendingConfirm = {
-          commandId: command.id,
-          appendMode: append,
-          message: `命令“${command.title}”属于${riskLabel(command.risk)}操作，确认${append ? "追加到" : "填入"}后台输入框？`
-        };
-        render();
-        return;
-      }
-    }
     state.ui.pendingConfirm = null;
     const ok = append
       ? runtimeServices.targetWriter.append(output)
@@ -2480,9 +2467,6 @@
     render();
   }
 
-  function isRiskyCommand(command) {
-    return Boolean(command) && command.risk !== "normal";
-  }
 
   function savePreset(command) {
     const ws = ensureWorkspace(command.id);
